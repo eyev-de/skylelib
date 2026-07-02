@@ -1,0 +1,143 @@
+group = "de.eyev.flutter_eap"
+version = "1.0-SNAPSHOT"
+
+buildscript {
+    ext.kotlin_version = "1.7.10"
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath("com.android.tools.build:gradle:7.3.1")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version")
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+
+// --- Prebuilt skylelib (release-pipeline artifact) ---------------------------
+// Resolution order (first hit wins):
+//   1. -PSKYLELIB_DIST=<dir> gradle property or SKYLELIB_DIST env var
+//   2. <skylelib repo>/dist/android (source-tree development, build_sdk.sh)
+//   3. <plugin>/.skylelib/<version>/android — per-version cache, downloaded from
+//      the public GitHub release matching the plugin's pubspec version. This is
+//      the path taken when the plugin is consumed as a pub git dependency.
+def skylelibVersion = {
+    def m = new File(projectDir, "../pubspec.yaml").text =~ /(?m)^version:\s*(\S+)/
+    m.find() ? m.group(1) : null
+}()
+def skylelibOverride = project.findProperty("SKYLELIB_DIST") ?: System.getenv("SKYLELIB_DIST")
+def skylelibRepoDist = new File(projectDir, "../../../../dist/android")
+def skylelibDist = skylelibOverride ? new File(skylelibOverride.toString())
+        : (new File(skylelibRepoDist, "jniLibs").directory ? skylelibRepoDist
+        : new File(projectDir, "../.skylelib/${skylelibVersion}/android"))
+
+tasks.register("downloadSkylelib") {
+    onlyIf { !new File(skylelibDist, "jniLibs").directory }
+    doLast {
+        if (skylelibVersion == null) {
+            throw new GradleException("flutter_eap: could not parse version: from pubspec.yaml")
+        }
+        def url = "https://github.com/eyev-de/skylelib/releases/download/" +
+                "v${skylelibVersion}/skylelib-${skylelibVersion}-android.zip"
+        def zip = new File(skylelibDist.parentFile, "skylelib-${skylelibVersion}-android.zip")
+        zip.parentFile.mkdirs()
+        logger.lifecycle("flutter_eap: downloading ${url}")
+        try {
+            new URL(url).openConnection().with { conn ->
+                zip.withOutputStream { it << conn.inputStream }
+            }
+        } catch (Exception e) {
+            zip.delete()
+            throw new GradleException("flutter_eap: download failed: ${url}\n" +
+                    "Download/unzip the release yourself and pass -PSKYLELIB_DIST=<dir> " +
+                    "(or set the SKYLELIB_DIST env var) instead.", e)
+        }
+        copy { from zipTree(zip); into skylelibDist }
+        zip.delete()
+        if (!new File(skylelibDist, "jniLibs").directory) {
+            throw new GradleException("flutter_eap: ${url} did not contain jniLibs/")
+        }
+    }
+}
+
+android {
+    if (project.android.hasProperty("namespace")) {
+        namespace = "de.eyev.flutter_eap"
+    }
+
+    compileSdk = 35
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = "1.8"
+    }
+
+    sourceSets {
+        main.java.srcDirs += "src/main/kotlin"
+        test.java.srcDirs += "src/test/kotlin"
+        // Bundle the prebuilt libskylelib.so (per ABI) from the release pipeline
+        // (resolved/downloaded above).
+        main.jniLibs.srcDirs += "${skylelibDist}/jniLibs"
+    }
+
+    defaultConfig {
+        minSdk = 35
+
+        // CMake configuration for native C library.
+        // No C++ sources are used, so we disable the C++ STL to avoid
+        // bundling libc++_shared.so (which would also need 16 KB alignment).
+        externalNativeBuild {
+            cmake {
+                arguments "-DANDROID_STL=none", "-DSKYLELIB_DIST=${skylelibDist}"
+            }
+        }
+
+        ndk {
+            // Match the ABIs shipped in dist/android (no x86 slice).
+            abiFilters "armeabi-v7a", "arm64-v8a", "x86_64"
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('CMakeLists.txt')
+            version '3.22.1'
+        }
+    }
+
+    dependencies {
+        testImplementation("org.jetbrains.kotlin:kotlin-test")
+        testImplementation("org.mockito:mockito-core:5.19.0")
+    }
+
+    testOptions {
+        unitTests.all {
+            useJUnitPlatform()
+
+            testLogging {
+               events "passed", "skipped", "failed", "standardOut", "standardError"
+               outputs.upToDateWhen {false}
+               showStandardStreams = true
+            }
+        }
+    }
+    ndkVersion '28.2.13676358'
+}
+
+// The native CMake build and APK packaging both need the prebuilt libskylelib.so;
+// every AGP task runs after preBuild, so this covers both.
+preBuild.dependsOn "downloadSkylelib"

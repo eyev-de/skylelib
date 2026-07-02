@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>SkyleAvaloniaExample</RootNamespace>
+    <AssemblyName>SkyleAvaloniaExample</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- This example uses reflection-based bindings to keep the XAML simple. -->
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.2.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.1" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.1" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.2.1" Condition="'$(Configuration)' == 'Debug'" />
+  </ItemGroup>
+
+  <!--
+    Where the prebuilt skylelib shared library lives. Defaults to the local CMake
+    build output. Override on the command line to consume a packaged SDK release:
+      # point at the unzipped release folder (works for macOS / Windows / Linux):
+      dotnet run -p:SkylelibBuildDir=/path/to/unzipped-skylelib-sdk
+    The search below covers both a flat lib dir (local build) and the SDK layout
+    where the runtime lib sits under lib/ (macOS, Linux) or bin/ (Windows DLL).
+  -->
+  <PropertyGroup>
+    <SkylelibBuildDir Condition="'$(SkylelibBuildDir)' == ''">$(MSBuildProjectDirectory)/../../build/make-debug/lib</SkylelibBuildDir>
+  </PropertyGroup>
+
+  <Target Name="CopySkylelibNative" BeforeTargets="Build">
+    <ItemGroup>
+      <SkylelibNative Condition="$([MSBuild]::IsOSPlatform('OSX'))" Include="$(SkylelibBuildDir)/libskylelib*.dylib;$(SkylelibBuildDir)/lib/libskylelib*.dylib" />
+      <SkylelibNative Condition="$([MSBuild]::IsOSPlatform('Windows'))" Include="$(SkylelibBuildDir)/skylelib.dll;$(SkylelibBuildDir)/bin/skylelib.dll" />
+      <SkylelibNative Condition="$([MSBuild]::IsOSPlatform('Linux'))" Include="$(SkylelibBuildDir)/libskylelib.so*;$(SkylelibBuildDir)/lib/libskylelib.so*" />
+    </ItemGroup>
+    <Warning Condition="'@(SkylelibNative)' == ''"
+             Text="skylelib native library not found under $(SkylelibBuildDir). Download a release and pass -p:SkylelibBuildDir=&lt;unzipped sdk&gt;, or build the C library locally (see README)." />
+    <Copy Condition="'@(SkylelibNative)' != ''"
+          SourceFiles="@(SkylelibNative)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>
