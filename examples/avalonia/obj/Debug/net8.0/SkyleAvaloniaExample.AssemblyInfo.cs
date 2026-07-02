@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("SkyleAvaloniaExample")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+ac6049ebc5134da7b4e02846d0c8a1b9acd25e86")]
 [assembly: System.Reflection.AssemblyProductAttribute("SkyleAvaloniaExample")]
 [assembly: System.Reflection.AssemblyTitleAttribute("SkyleAvaloniaExample")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
