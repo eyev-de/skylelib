@@ -206,6 +206,7 @@ internal struct EapCallbackConfig
     public IntPtr OnCalibrationProgress;
     public IntPtr OnCalibrationPaused;
     public IntPtr OnCalibrationFinished;
+    public IntPtr OnCalibrationAborted;
     public IntPtr OnVideo;
     public IntPtr OnFileStatus;
     public IntPtr OnLogging;

@@ -4,7 +4,7 @@ homepage: https://github.com/eyev-de/skylelib
 # Version tracks the skylelib SDK version (single SemVer for the whole SDK,
 # bumped by tag.sh). The native builds download the GitHub release asset
 # matching this version when no local dist/ is available.
-version: 0.1.5
+version: 0.1.6
 
 environment:
   sdk: ^3.7.0
