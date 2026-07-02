@@ -22,8 +22,9 @@ SOFTWARE.
 
 ---
 
-Note: this license covers the flutter_eap plugin source code ONLY. The
-skylelib SDK binaries that the plugin downloads at build time are
-proprietary software of eyeV GmbH and are licensed under their own
-terms — see the LICENSE file inside each SDK archive, or contact
-support@eyev.de.
+Note: this license covers the example applications and the flutter_eap
+plugin source code in this repository ONLY. The skylelib SDK itself
+(the prebuilt binaries and headers distributed as release assets and
+consumed by these examples) is proprietary software of eyeV GmbH and is
+licensed under its own terms — see the LICENSE file inside each SDK
+archive, or contact support@eyev.de.

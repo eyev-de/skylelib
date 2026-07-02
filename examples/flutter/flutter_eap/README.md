@@ -314,4 +314,7 @@ flutter run
 
 ## License
 
-Proprietary - eyeV GmbH. All rights reserved.
+The flutter_eap plugin source code is licensed under the
+[MIT License](LICENSE). The prebuilt skylelib binaries it downloads at
+build time are proprietary software of eyeV GmbH, licensed under the
+terms shipped inside each SDK archive.

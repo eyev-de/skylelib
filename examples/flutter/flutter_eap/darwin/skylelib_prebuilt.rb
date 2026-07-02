@@ -16,6 +16,31 @@ def skylelib_pubspec_version(plugin_dir)
   v
 end
 
+# Copy the resolved skylelib.xcframework into <podspec_dir>/.skylelib/ and
+# return its path relative to the podspec dir, for use as s.vendored_frameworks.
+#
+# Why vendor instead of OTHER_LDFLAGS: with `use_frameworks! :linkage => :static`
+# the pod is archived with libtool, which performs no link, so a libskylelib.a in
+# the pod target's OTHER_LDFLAGS is silently dropped and the app's final link
+# fails with undefined _eap_client_* symbols. `vendored_frameworks` makes
+# CocoaPods link the static library into whichever target performs the final
+# link (the pod framework when dynamic, the app target when static). The copy
+# is needed because CocoaPods file accessors only see paths inside the pod root
+# (the podspec directory); SKYLELIB_DIST, the repo dist/ and the download cache
+# all live outside it.
+def skylelib_vendor_xcframework(podspec_dir)
+  dist = skylelib_resolve_dist(podspec_dir)
+  src  = File.join(dist, 'skylelib.xcframework')
+  raise "flutter_eap: no skylelib.xcframework in #{dist}" unless File.directory?(src)
+  require 'fileutils'
+  dst = File.join(podspec_dir, '.skylelib', 'skylelib.xcframework')
+  FileUtils.rm_rf(dst)
+  FileUtils.mkdir_p(File.dirname(dst))
+  # preserve mtimes so unchanged binaries do not retrigger Xcode rebuilds
+  FileUtils.cp_r(src, dst, preserve: true)
+  File.join('.skylelib', 'skylelib.xcframework')
+end
+
 def skylelib_resolve_dist(podspec_dir)
   plugin  = File.expand_path('..', podspec_dir)
   version = skylelib_pubspec_version(plugin)

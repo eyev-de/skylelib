@@ -127,3 +127,15 @@ dependencies:
 - **Versioning:** the SDK uses plain SemVer; the version is the release tag
   (`vX.Y.Z`) and is also queryable at runtime via `skylelib_version()`.
 - Questions / device access: **support@eyev.de**.
+
+## License
+
+- **Example apps + `flutter_eap` plugin** (everything in this repository):
+  [MIT](LICENSE) — use them freely as a starting point for your own
+  integration.
+- **skylelib SDK** (the prebuilt binaries + headers attached to
+  [Releases](https://github.com/eyev-de/skylelib/releases)): proprietary,
+  © eyeV GmbH. Each SDK zip contains its license; in short, you may build
+  applications for Skyle devices with it and ship the binaries embedded in
+  your app, but not redistribute the SDK itself. Contact
+  **support@eyev.de** for other licensing needs.

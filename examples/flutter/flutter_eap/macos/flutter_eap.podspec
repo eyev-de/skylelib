@@ -33,16 +33,19 @@ handling with an FFI bridge to Dart. macOS uses IOKit for USB bulk transfers.
   s.frameworks = 'IOKit', 'CoreFoundation'
 
   # --- Prebuilt skylelib (release-pipeline artifact) ---------------------------
-  # Consume the macOS slice of skylelib.xcframework instead of compiling skylelib
-  # from source — the same artifact the SwiftUI example links. Resolution order
-  # (see darwin/skylelib_prebuilt.rb): SKYLELIB_DIST env → the skylelib source
-  # tree's dist/ → download the GitHub release matching the plugin version into
+  # Consume skylelib.xcframework instead of compiling skylelib from source — the
+  # same artifact the SwiftUI example links. Resolution order (see
+  # darwin/skylelib_prebuilt.rb): SKYLELIB_DIST env → the skylelib source tree's
+  # dist/ → download the GitHub release matching the plugin version into
   # <plugin>/.skylelib/ (the path taken when consumed as a pub git dependency).
+  # The xcframework is then copied into macos/.skylelib/ and vendored, so
+  # CocoaPods links libskylelib.a into the target that performs the final link
+  # (works for both dynamic and static `use_frameworks!` linkage).
   # NOTE: resolve the Flutter plugin symlink (…/ephemeral/.symlinks/plugins/…)
   # to the real vendored location — File.expand_path alone keeps the symlink path.
   here  = File.realpath(__dir__)
-  dist  = skylelib_resolve_dist(here)
-  slice = File.join(dist, 'skylelib.xcframework', 'macos-arm64_x86_64')
+  s.vendored_frameworks = skylelib_vendor_xcframework(here)
+  slice = '${PODS_TARGET_SRCROOT}/.skylelib/skylelib.xcframework/macos-arm64_x86_64'
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
@@ -53,7 +56,6 @@ handling with an FFI bridge to Dart. macOS uses IOKit for USB bulk transfers.
       "\"#{slice}/Headers/skylelib\"",
       '"${PODS_TARGET_SRCROOT}/../darwin/Classes"',
     ].join(' '),
-    'OTHER_LDFLAGS' => "\"#{File.join(slice, 'libskylelib.a')}\"",
     'GCC_C_LANGUAGE_STANDARD' => 'c17',
     'OTHER_CFLAGS' => '-DEAP_PLATFORM_POSIX',
   }
