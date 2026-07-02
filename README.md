@@ -116,7 +116,7 @@ dependencies:
     git:
       url: https://github.com/eyev-de/skylelib.git
       path: examples/flutter/flutter_eap
-      ref: v0.1.1   # pin a release tag; binaries of the same version are fetched automatically
+      ref: v0.2.0   # pin a release tag; binaries of the same version are fetched automatically
 ```
 
 ## Notes
