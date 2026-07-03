@@ -14,7 +14,7 @@
  *   - Adapters pass C structs by value to Dart
  *
  * Ported from flutter_eap_bridge_apple.c with these changes:
- *   - pthread_mutex -> eap_mutex (cross-platform threading abstraction)
+ *   - pthread_mutex -> eap_mutex (local CRITICAL_SECTION wrapper, see below)
  *   - eap_transport_iokit -> eap_transport_usb
  *   - Removed iOS push-mode functions
  *   - Removed TARGET_OS_OSX/TARGET_OS_IOS guards
@@ -23,11 +23,42 @@
 #include "flutter_eap_bridge_windows.h"
 #include <eap_client.h>
 #include <eap/eap_message_types.h>
-#include <eap_threading.h>
 #include <eap_transport_usb.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
+/* =========================================================================
+ * Local mutex wrapper
+ *
+ * skylelib's eap_threading.h is an internal header: it is not shipped in the
+ * prebuilt SDK zips and its symbols are not exported from skylelib.dll, so
+ * this bridge cannot use it. Recursive CRITICAL_SECTION matches the original
+ * eap_mutex Windows semantics.
+ * ========================================================================= */
+
+typedef struct eap_mutex { CRITICAL_SECTION cs; } eap_mutex;
+
+static eap_mutex* eap_mutex_create(void) {
+    eap_mutex* mutex = (eap_mutex*)malloc(sizeof(eap_mutex));
+    if (!mutex) return NULL;
+    InitializeCriticalSection(&mutex->cs);
+    return mutex;
+}
+
+static void eap_mutex_destroy(eap_mutex* mutex) {
+    if (!mutex) return;
+    DeleteCriticalSection(&mutex->cs);
+    free(mutex);
+}
+
+static void eap_mutex_lock(eap_mutex* mutex) { if (mutex) EnterCriticalSection(&mutex->cs); }
+static void eap_mutex_unlock(eap_mutex* mutex) { if (mutex) LeaveCriticalSection(&mutex->cs); }
 
 #define LOG_TAG "FlutterEapBridge"
 #define LOGD(...) do { fprintf(stderr, "[" LOG_TAG "] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
