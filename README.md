@@ -16,6 +16,9 @@ itself is closed-source; this repository ships **runnable examples** plus the
 Both show the same thing: connect to a Skyle, then stream live gaze,
 positioning and video.
 
+📖 **[Documentation.md](Documentation.md)** — the full public C API reference
+(client lifecycle, transport, callbacks, message types and data structures).
+
 ## 1. Get a binary
 
 Open the [latest release](https://github.com/eyev-de/skylelib/releases/latest)
@@ -35,7 +38,8 @@ the native library **and** the public headers (`include/skylelib/…`).
 | **Apple (all)** | macOS 11 / iOS 13 | universal | `skylelib-<version>-xcframework.zip` | `skylelib.xcframework` (headers embedded) | static |
 
 > The library is **big-endian on the wire** and exposes an opaque `eap_client`
-> handle — see the headers in any release zip for the full C API.
+> handle — see [Documentation.md](Documentation.md) or the headers in any
+> release zip for the full C API.
 
 Which example needs which asset:
 
