@@ -2,6 +2,10 @@
 
 High-performance Flutter plugin for Skyle eye-tracking device communication using the EAP (External Accessory Protocol) over iAP2/USB.
 
+📖 **[Documentation.md](Documentation.md)** — the full public Dart API reference
+(`EapClient`, streams, control settings, calibration, file upload, Riverpod
+providers and data models).
+
 ## Features
 
 - **Native Performance**: C library via FFI for low-latency communication

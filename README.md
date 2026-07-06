@@ -16,8 +16,10 @@ itself is closed-source; this repository ships **runnable examples** plus the
 Both show the same thing: connect to a Skyle, then stream live gaze,
 positioning and video.
 
-📖 **[Documentation.md](Documentation.md)** — the full public C API reference
-(client lifecycle, transport, callbacks, message types and data structures).
+📖 **API reference:** [Documentation.md](Documentation.md) — the full public C
+API (client lifecycle, transport, callbacks, message types and data structures).
+For the Dart binding, see
+[flutter_eap/Documentation.md](examples/flutter/flutter_eap/Documentation.md).
 
 ## 1. Get a binary
 
@@ -120,7 +122,7 @@ dependencies:
     git:
       url: https://github.com/eyev-de/skylelib.git
       path: examples/flutter/flutter_eap
-      ref: v0.2.0   # pin a release tag; binaries of the same version are fetched automatically
+      ref: v1.0.0   # pin a release tag; binaries of the same version are fetched automatically
 ```
 
 ## Notes
