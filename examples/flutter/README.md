@@ -12,14 +12,17 @@ release pipeline — it does **not** compile skylelib from source.
 
 ```
 examples/flutter/
-  flutter_eap/     # the vendored FFI plugin (Dart bindings + native bridge)
-  app/             # the example app (this is what you run)
+  flutter_eap/           # the vendored FFI plugin (Dart bindings + native bridge)
+  flutter_eap_riverpod/  # Riverpod providers on top of flutter_eap
+  app/                   # the example app (this is what you run)
 ```
 
 - `flutter_eap` is the binding: Dart FFI + a small C bridge, exposing the C
-  callbacks as Riverpod streams. Its per-platform build files link the prebuilt
-  skylelib (see "How native libs are pulled" below).
-- `app` depends on `flutter_eap` via a path dependency and implements the UI.
+  callbacks as plain Dart streams. Its per-platform build files link the
+  prebuilt skylelib (see "How native libs are pulled" below).
+- `flutter_eap_riverpod` wraps those streams as Riverpod providers; apps using
+  other state managers can depend on `flutter_eap` alone.
+- `app` depends on both via path dependencies and implements the UI.
 
 ## Prerequisites
 
@@ -119,8 +122,8 @@ The first build per platform needs network access to fetch the release asset
 
 ## How it works
 
-- The plugin exposes the C client as Riverpod providers. The app wraps itself in
-  a `ProviderScope` and watches:
+- `flutter_eap_riverpod` exposes the C client as Riverpod providers. The app
+  wraps itself in a `ProviderScope` and watches:
   - `eapConnectionStateStreamProvider` → connection badge
   - `eapPositioningDataStreamProvider` → `PositioningView` (CustomPainter)
   - `eapVideoDataStreamProvider` → `VideoView` (decoded to a `ui.Image`)

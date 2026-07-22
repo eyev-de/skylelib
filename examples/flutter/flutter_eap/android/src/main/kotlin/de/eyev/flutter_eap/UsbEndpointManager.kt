@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.*
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import io.flutter.Log
@@ -101,16 +102,33 @@ class UsbEndpointManager(
         }
 
         Log.d("UsbEndpointManager", "Requesting permission for device")
+        // The intent must stay mutable so the system can attach EXTRA_DEVICE /
+        // EXTRA_PERMISSION_GRANTED. Below S mutability is the default and
+        // FLAG_MUTABLE does not exist yet.
+        val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
         val permissionIntent = PendingIntent.getBroadcast(
             context,
             USB_PERMISSION_REQUEST_CODE,
             Intent(ACTION_USB_PERMISSION).apply {
                 setPackage(context.packageName)
             },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+            pendingIntentFlags
         )
         usbManager.requestPermission(device, permissionIntent)
     }
+
+    // Typed getParcelableExtra needs API 33; the untyped one is deprecated there.
+    private fun usbDeviceExtra(intent: Intent): UsbDevice? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+        }
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -118,7 +136,7 @@ class UsbEndpointManager(
 
             when (intent?.action) {
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    val device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                    val device = usbDeviceExtra(intent)
                     device?.let {
                         Log.d("UsbEndpointManager", "Attached: ${it.deviceName}, vendorId=${it.vendorId}, productId=${it.productId}")
                         // logUsbDevice(it)
@@ -128,7 +146,7 @@ class UsbEndpointManager(
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    val device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                    val device = usbDeviceExtra(intent)
                     device?.let {
                         Log.d("UsbEndpointManager", "Detached: ${it.deviceName}, vendorId=${it.vendorId}, productId=${it.productId}")
                         // logUsbDevice(it)
@@ -142,7 +160,7 @@ class UsbEndpointManager(
                 ACTION_USB_PERMISSION -> {
                     synchronized(this) {
                         Log.d("UsbEndpointManager", "=== PERMISSION RESPONSE RECEIVED ===")
-                        var device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                        var device = usbDeviceExtra(intent)
                         val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
 
                         Log.d("UsbEndpointManager", "Permission response - device: ${device?.deviceName}, granted: $granted")
@@ -172,7 +190,16 @@ class UsbEndpointManager(
         usbConnectionFilter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
         usbConnectionFilter.addAction(ACTION_USB_PERMISSION)
 
-        context.registerReceiver(usbReceiver, usbConnectionFilter, Context.RECEIVER_NOT_EXPORTED)
+        // RECEIVER_NOT_EXPORTED is mandatory for runtime receivers with custom
+        // actions from targetSdk 34 on; the flagged overload needs API 33. The
+        // system USB broadcasts and the own-package permission broadcast are
+        // still delivered to a non-exported receiver.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(usbReceiver, usbConnectionFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            context.registerReceiver(usbReceiver, usbConnectionFilter)
+        }
 
         val deviceList: HashMap<String, UsbDevice> = usbManager.deviceList
         deviceList.values.forEach {

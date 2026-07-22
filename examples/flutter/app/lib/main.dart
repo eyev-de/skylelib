@@ -1,7 +1,7 @@
 // Flutter also defines a `ConnectionState` (for StreamBuilder); hide it so the
 // EAP one from flutter_eap is unambiguous.
 import 'package:flutter/material.dart' hide ConnectionState;
-import 'package:flutter_eap/flutter_eap_providers.dart';
+import 'package:flutter_eap_riverpod/flutter_eap_riverpod.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'positioning_view.dart';

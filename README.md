@@ -125,6 +125,10 @@ dependencies:
       ref: v1.0.0   # pin a release tag; binaries of the same version are fetched automatically
 ```
 
+Riverpod users can add `flutter_eap_riverpod` (same git url and ref, path
+`examples/flutter/flutter_eap_riverpod`) for ready-made providers wrapping the
+client's streams; it re-exports the full `flutter_eap` API.
+
 ## Notes
 
 - **Callbacks run on the library's background I/O thread.** Both examples decode

@@ -2,7 +2,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_eap/flutter_eap_providers.dart';
+import 'package:flutter_eap_riverpod/flutter_eap_riverpod.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// Shows the device video stream. Each frame (1=grayscale, 3=BGR, 4=BGRA) is

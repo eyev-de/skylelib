@@ -3,7 +3,8 @@
 **flutter_eap** is the Flutter/Dart binding for **skylelib**, eyeV's
 cross-platform library for the **Skyle** eye-tracker (VID `0x3729`, PID
 `0x7333`). It talks to the prebuilt native skylelib over `dart:ffi` and exposes a
-high-level, stream-based Dart API plus optional Riverpod providers.
+high-level, stream-based Dart API. Optional Riverpod providers ship in the
+separate sibling package **flutter_eap_riverpod**.
 
 - **Package:** `flutter_eap`
 - **Platforms:** Android (USB Host), iOS/iPadOS (ExternalAccessory), macOS
@@ -50,13 +51,18 @@ dependencies:
       ref: v0.2.0   # pin a release tag; the matching binaries are fetched automatically
 ```
 
-The package offers three entry points so you import only what you need:
+The package offers two entry points so you import only what you need:
 
 | Import | Exposes |
 |--------|---------|
 | `package:flutter_eap/flutter_eap.dart` | `EapClient` + all data models. The usual choice. |
-| `package:flutter_eap/flutter_eap_models.dart` | Data models **only** — no client, no providers. Use in isolates / overlay windows to avoid accidental client init. |
-| `package:flutter_eap/flutter_eap_providers.dart` | `EapClient` + models + the Riverpod providers. |
+| `package:flutter_eap/flutter_eap_models.dart` | Data models **only** — no client. Use in isolates / overlay windows to avoid accidental client init. |
+
+Riverpod users: depend on the sibling package `flutter_eap_riverpod` (same git
+url/ref, path `examples/flutter/flutter_eap_riverpod`) and import
+`package:flutter_eap_riverpod/flutter_eap_riverpod.dart`, which re-exports the
+full flutter_eap API plus the providers — see
+[Riverpod providers](#riverpod-providers).
 
 ---
 
@@ -281,8 +287,21 @@ Both deliver `EapLogMessage`.
 
 ## Riverpod providers
 
-Import `package:flutter_eap/flutter_eap_providers.dart`. All providers are
-`keepAlive` and share a single `EapClient` that survives hot restart.
+The providers live in the separate **flutter_eap_riverpod** package, so apps
+using other state managers can depend on flutter_eap alone:
+
+```yaml
+dependencies:
+  flutter_eap_riverpod:
+    git:
+      url: https://github.com/eyev-de/skylelib.git
+      path: examples/flutter/flutter_eap_riverpod
+      ref: vX.Y.Z   # same tag as flutter_eap; it is resolved automatically
+```
+
+Import `package:flutter_eap_riverpod/flutter_eap_riverpod.dart` (re-exports
+the full flutter_eap API). All providers are `keepAlive` and share a single
+`EapClient` that survives hot restart.
 
 | Provider | Type | Description |
 |----------|------|-------------|

@@ -1,3 +1,15 @@
+## Unreleased
+
+### Breaking Changes
+
+- Riverpod providers moved to the new sibling package `flutter_eap_riverpod`.
+  Replace `import 'package:flutter_eap/flutter_eap_providers.dart';` with
+  `import 'package:flutter_eap_riverpod/flutter_eap_riverpod.dart';` (it
+  re-exports the full flutter_eap API). flutter_eap itself no longer depends
+  on Riverpod - its API is plain Dart streams.
+- Dropped unused dependencies: `collection`, `plugin_platform_interface`,
+  `riverpod`, `riverpod_annotation` (and the codegen dev dependencies).
+
 ## 0.0.1 - November 2, 2025
 
 ### Initial Release

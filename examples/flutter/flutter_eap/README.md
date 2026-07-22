@@ -3,8 +3,9 @@
 High-performance Flutter plugin for Skyle eye-tracking device communication using the EAP (External Accessory Protocol) over iAP2/USB.
 
 📖 **[Documentation.md](Documentation.md)** — the full public Dart API reference
-(`EapClient`, streams, control settings, calibration, file upload, Riverpod
-providers and data models).
+(`EapClient`, streams, control settings, calibration, file upload and data
+models). Riverpod providers live in the sibling
+[flutter_eap_riverpod](../flutter_eap_riverpod) package.
 
 ## Features
 
@@ -15,7 +16,8 @@ providers and data models).
 - **Calibration**: Interactive 5/9-point calibration workflow
 - **Video Streaming**: Raw camera frames via chunked transfer
 - **File Upload**: Chunked file transfer with progress tracking
-- **Riverpod Integration**: Providers for reactive state management
+- **State-manager agnostic**: Plain Dart streams; Riverpod providers available
+  separately in [flutter_eap_riverpod](../flutter_eap_riverpod)
 - **Type-safe API**: Comprehensive data models and error handling
 
 ## Architecture
@@ -98,23 +100,12 @@ client.dispose();
 
 ### Riverpod Integration
 
-```dart
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_eap/flutter_eap.dart';
-
-class GazeWidget extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final gazeAsync = ref.watch(eapGazeDataStreamProvider);
-
-    return gazeAsync.when(
-      data: (gaze) => Text('Gaze: (${gaze.gazeX}, ${gaze.gazeY})'),
-      loading: () => CircularProgressIndicator(),
-      error: (err, stack) => Text('Error: $err'),
-    );
-  }
-}
-```
+Riverpod providers moved to the sibling
+[flutter_eap_riverpod](../flutter_eap_riverpod) package, so apps using other
+state managers can depend on flutter_eap alone. Depend on
+`flutter_eap_riverpod` and import
+`package:flutter_eap_riverpod/flutter_eap_riverpod.dart` (it re-exports the
+full flutter_eap API); see its README for the provider list.
 
 ## API Reference
 
@@ -186,19 +177,8 @@ void cancelUpload()
 
 ### Riverpod Providers
 
-| Provider | Type | Description |
-|----------|------|-------------|
-| `eapClientProvider` | `EapClient` | Singleton client instance |
-| `eapGazeDataStreamProvider` | `Stream<GazesData>` | Gaze stream |
-| `eapPositioningDataStreamProvider` | `Stream<FaceData>` | Positioning stream |
-| `eapVideoDataStreamProvider` | `Stream<VideoFrame>` | Video stream |
-| `eapConnectionStateProvider` | `ConnectionState` | Current state |
-| `eapConnectionStateStreamProvider` | `Stream<ConnectionState>` | State changes |
-| `eapControlDataStreamProvider` | `Stream<ControlData>` | Control data |
-| `eapCurrentControlDataProvider` | `ControlData` | Cached control state |
-| `eapCalibrationStreamProvider` | `Stream<CalibrationMessage>` | Calibration events |
-| `eapVersionDataProvider` | `Future<VersionData>` | Version (waits for linkSynced) |
-| `eapErrorStreamProvider` | `Stream<String>` | Error messages |
+Moved to the sibling [flutter_eap_riverpod](../flutter_eap_riverpod) package;
+its README lists all providers.
 
 ## Data Models
 

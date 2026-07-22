@@ -1,0 +1,35 @@
+name: flutter_eap_riverpod
+description: "Riverpod providers for the flutter_eap Skyle eye-tracker plugin - reactive access to the client, gaze/positioning/video streams, calibration, and connection state."
+homepage: https://github.com/eyev-de/skylelib
+# Consumed as a pub git dependency (path: examples/flutter/flutter_eap_riverpod),
+# never published to pub.dev - the path dependency on flutter_eap below is
+# resolved against the same git repo/ref by pub.
+publish_to: none
+# Version tracks the skylelib SDK version in lockstep with flutter_eap
+# (single SemVer for the whole SDK, bumped by tag.sh).
+version: 1.1.0
+
+environment:
+  sdk: ^3.7.0
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Resolved relative to this repo; for git consumers pub resolves this as a
+  # git dependency on the same repo/ref (both packages live in this repo).
+  flutter_eap:
+    path: ../flutter_eap
+  # Floor 3.3.0: the checked-in eap_providers.g.dart is generated for the
+  # riverpod 3.3.x runtime API (WhenComplete runBuild); 3.2.x will not compile.
+  riverpod: ^3.3.0
+  riverpod_annotation: ^4.0.3
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.13
+  # Floor 4.0.4: older generators emit code for the riverpod 3.2.x runtime,
+  # which does not compile against the riverpod ^3.3.0 this package requires.
+  # Needs a Flutter SDK >= 3.44 (older SDKs pin meta 1.17, which cannot
+  # resolve the analyzer this generator needs).
+  riverpod_generator: ^4.0.4

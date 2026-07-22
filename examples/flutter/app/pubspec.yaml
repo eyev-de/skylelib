@@ -39,7 +39,10 @@ dependencies:
   flutter_eap:
     path: ../flutter_eap
 
-  # Riverpod — the plugin exposes its streams as Riverpod providers.
+  # Riverpod providers wrapping the plugin's streams (separate package so
+  # non-Riverpod apps can depend on flutter_eap alone).
+  flutter_eap_riverpod:
+    path: ../flutter_eap_riverpod
   flutter_riverpod: ^3.0.0
 
 dev_dependencies:

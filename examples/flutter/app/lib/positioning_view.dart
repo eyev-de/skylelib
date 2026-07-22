@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_eap/flutter_eap_providers.dart';
+import 'package:flutter_eap_riverpod/flutter_eap_riverpod.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// Diagnostic positioning view: draws per-eye box, pupil (with fitted ellipse),

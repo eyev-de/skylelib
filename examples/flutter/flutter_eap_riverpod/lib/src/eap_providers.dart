@@ -3,10 +3,8 @@
 library;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_eap/flutter_eap.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
-
-import '../eap_client.dart';
-import '../models/models.dart';
 
 part 'eap_providers.g.dart';
 

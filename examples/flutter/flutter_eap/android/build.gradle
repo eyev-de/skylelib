@@ -95,7 +95,10 @@ android {
     }
 
     defaultConfig {
-        minSdk = 35
+        // Floor set by the prebuilt libskylelib.so (built with ANDROID_PLATFORM=android-24,
+        // see scripts/build_sdk.sh). Newer platform APIs in the Kotlin layer are
+        // guarded with SDK_INT checks in UsbEndpointManager.
+        minSdk = 24
 
         // CMake configuration for native C library.
         // No C++ sources are used, so we disable the C++ STL to avoid

@@ -399,7 +399,9 @@ Result: USB connection preserved, callbacks swapped, no reconnection delay.
 | `lib/src/ffi/eap_client_bindings.dart` | Generated FFI bindings to C functions |
 | `lib/src/ffi/ffi_structs.dart` | Dart FFI struct definitions |
 | `lib/src/eap_client.dart` | High-level Dart API |
-| `lib/src/providers/eap_providers.dart` | Riverpod providers |
+
+Riverpod providers live in the sibling `flutter_eap_riverpod` package
+(`lib/src/eap_providers.dart` there).
 
 ### iOS
 
