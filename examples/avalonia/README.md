@@ -21,7 +21,8 @@ No USB code lives in C#: the library's built-in transports do all USB I/O
 
 ## Prerequisites
 
-- .NET SDK 8.0 or newer (`dotnet --version`).
+- .NET SDK 8.0 or 10.0 (`dotnet --version`). The project multi-targets
+  `net8.0;net10.0`; install either SDK, or both to build every target framework.
 - The skylelib native shared library, built for your platform.
 
 ## 1. Get the native library
@@ -50,12 +51,15 @@ output (Option B). The build copies the native library next to the executable
 automatically — it searches both `lib/` and `bin/`, so the unzipped SDK **root**
 works on every OS:
 
+Because the project multi-targets, pass `-f net8.0` or `-f net10.0` to pick the
+framework to run:
+
 ```bash
 # Option A: a downloaded release
-dotnet run --project examples/avalonia -p:SkylelibBuildDir=/path/to/sdk
+dotnet run --project examples/avalonia -f net10.0 -p:SkylelibBuildDir=/path/to/sdk
 
 # Option B: a local source build
-dotnet run --project examples/avalonia            # uses build/make-debug/lib by default
+dotnet run --project examples/avalonia -f net10.0  # uses build/make-debug/lib by default
 ```
 
 > On Windows the runtime DLL lives in `bin/` inside the release zip; pointing

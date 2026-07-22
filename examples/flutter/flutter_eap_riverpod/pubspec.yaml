@@ -7,7 +7,7 @@ homepage: https://github.com/eyev-de/skylelib
 publish_to: none
 # Version tracks the skylelib SDK version in lockstep with flutter_eap
 # (single SemVer for the whole SDK, bumped by tag.sh).
-version: 1.1.0
+version: 1.2.0
 
 environment:
   sdk: ^3.7.0

@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <RootNamespace>SkyleAvaloniaExample</RootNamespace>
@@ -13,11 +13,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="11.2.1" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.2.1" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.1" />
-    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.1" />
-    <PackageReference Include="Avalonia.Diagnostics" Version="11.2.1" Condition="'$(Configuration)' == 'Debug'" />
+    <PackageReference Include="Avalonia" Version="12.1.0" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.0" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.0" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="12.1.0" />
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3" Condition="'$(Configuration)' == 'Debug'" />
   </ItemGroup>
 
   <!--
@@ -32,7 +32,8 @@
     <SkylelibBuildDir Condition="'$(SkylelibBuildDir)' == ''">$(MSBuildProjectDirectory)/../../build/make-debug/lib</SkylelibBuildDir>
   </PropertyGroup>
 
-  <Target Name="CopySkylelibNative" BeforeTargets="Build">
+  <!-- Runs per-TFM only: the multi-target outer build has no $(TargetFramework)/$(OutDir). -->
+  <Target Name="CopySkylelibNative" BeforeTargets="Build" Condition="'$(TargetFramework)' != ''">
     <ItemGroup>
       <SkylelibNative Condition="$([MSBuild]::IsOSPlatform('OSX'))" Include="$(SkylelibBuildDir)/libskylelib*.dylib;$(SkylelibBuildDir)/lib/libskylelib*.dylib" />
       <SkylelibNative Condition="$([MSBuild]::IsOSPlatform('Windows'))" Include="$(SkylelibBuildDir)/skylelib.dll;$(SkylelibBuildDir)/bin/skylelib.dll" />
