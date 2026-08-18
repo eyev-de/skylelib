@@ -46,6 +46,23 @@ class UsbEndpointManager(
         // thread counts consecutive write failures and forces a reconnect,
         // instead of blocked writes stalling the link for 100ms apiece.
         private const val WRITE_TIMEOUT_MS = 20
+
+        // Manifest-grant poll: 100ms steps. 5s covers slow boots where the
+        // UsbAttachActivity route needs longer before falling back to an
+        // explicit permission dialog.
+        private const val GRANT_POLL_INTERVAL_MS = 100L
+        private const val GRANT_POLL_MAX_ATTEMPTS = 50
+
+        // Open retries: a failed openDevice/claimInterface right after attach
+        // is usually transient (enumeration still settling, stale connection
+        // to a re-enumerated instance not torn down yet). The open path is the
+        // ONLY way the link comes up - the native transport callbacks are
+        // read/write/isDeviceConnected only, so the C reconnect loop cannot
+        // re-trigger it. Without retries a single failure kept the link down
+        // until a physical replug.
+        private const val OPEN_RETRY_MAX_ATTEMPTS = 15
+        private const val OPEN_RETRY_BASE_DELAY_MS = 500L
+        private const val OPEN_RETRY_MAX_DELAY_MS = 5000L
     }
 
     private val isConnected: Boolean
@@ -55,8 +72,21 @@ class UsbEndpointManager(
 
     private var requestingPermission: Boolean = false
 
+    // Cancels pending open retries: bumped when a detach invalidates the chain.
+    // Retry closures capture the generation at schedule time and bail when it
+    // moved on.
+    private var openRetryGeneration = 0
+
     private val ACTION_USB_PERMISSION = "${context.packageName}.USB_PERMISSION"
     private val USB_PERMISSION_REQUEST_CODE = 0
+
+    private fun findTargetDevice(): UsbDevice? =
+        usbManager.deviceList.values.firstOrNull { it.vendorId == targetVendorId && it.productId == targetProductId }
+
+    /** True when the open connection belongs to exactly this device instance. */
+    private fun isConnectedTo(device: UsbDevice): Boolean = synchronized(connectionLock) {
+        isConnected && connectedDevice?.deviceName == device.deviceName
+    }
 
     // Poll hasPermission() while the manifest-routed UsbAttachActivity grant is
     // propagating. When USB_DEVICE_ATTACHED fires, Android routes the intent to
@@ -66,28 +96,36 @@ class UsbEndpointManager(
     // (non-persistent) dialog on top of the system one, and corrupts the
     // requestingPermission flag. Polling lets the manifest grant arrive first.
     private fun pollForManifestGrantAndOpen(device: UsbDevice, attempt: Int = 0) {
-        if (isConnected) return
-        if (usbManager.hasPermission(device)) {
-            Log.d("UsbEndpointManager", "Manifest grant landed after $attempt attempt(s), opening device")
-            openDevice(device)
+        // Compare against THIS device instance: a lingering connection to a
+        // previous enumeration of the tracker (device re-enumerated after a
+        // firmware reset, DETACHED not processed yet) must not abort the chain
+        // for the new instance - openDevice tears the stale one down.
+        if (isConnectedTo(device)) return
+        if (usbManager.deviceList.values.none { it.deviceName == device.deviceName }) {
+            Log.d("UsbEndpointManager", "Device ${device.deviceName} gone - stopping grant poll (attach broadcast restarts it)")
             return
         }
-        if (attempt >= 20) {
-            // 20 * 100ms = 2s. Manifest route clearly did not happen (e.g. device was
-            // already plugged in at app startup on a fresh install, before any user
-            // has checked "Use by default"). Fall back to an explicit permission
-            // request so the user is at least prompted.
+        if (usbManager.hasPermission(device)) {
+            Log.d("UsbEndpointManager", "Manifest grant landed after $attempt attempt(s), opening device")
+            if (!openDevice(device)) scheduleOpenRetry(attempt = 0)
+            return
+        }
+        if (attempt >= GRANT_POLL_MAX_ATTEMPTS) {
+            // Manifest route clearly did not happen (e.g. device was already
+            // plugged in at app startup on a fresh install, before any user
+            // has checked "Use by default"). Fall back to an explicit
+            // permission request so the user is at least prompted.
             Log.d("UsbEndpointManager", "Manifest grant never arrived, falling back to requestPermission()")
             requestPermissionAndOpen(device)
             return
         }
-        mainHandler.postDelayed({ pollForManifestGrantAndOpen(device, attempt + 1) }, 100)
+        mainHandler.postDelayed({ pollForManifestGrantAndOpen(device, attempt + 1) }, GRANT_POLL_INTERVAL_MS)
     }
 
     private fun requestPermissionAndOpen(device: UsbDevice) {
         Log.d("UsbEndpointManager", "requestPermissionAndOpen called - requestingPermission=$requestingPermission, isConnected=$isConnected")
 
-        if (requestingPermission || isConnected) {
+        if (requestingPermission || isConnectedTo(device)) {
             Log.d("UsbEndpointManager", "Already requesting permission or connected, ignoring request")
             return
         }
@@ -97,7 +135,7 @@ class UsbEndpointManager(
         if (usbManager.hasPermission(device)) {
             Log.d("UsbEndpointManager", "Permission already granted, opening device directly")
             requestingPermission = false
-            openDevice(device)
+            if (!openDevice(device)) scheduleOpenRetry(attempt = 0)
             return
         }
 
@@ -118,7 +156,43 @@ class UsbEndpointManager(
             },
             pendingIntentFlags
         )
-        usbManager.requestPermission(device, permissionIntent)
+        try {
+            usbManager.requestPermission(device, permissionIntent)
+        } catch (e: Exception) {
+            // Stale device object (unplugged mid-flow): reset so the next
+            // attach can request again.
+            Log.w("UsbEndpointManager", "requestPermission failed: ${e.message}")
+            requestingPermission = false
+        }
+    }
+
+    /**
+     * Retry the open path with backoff. Re-resolves the current device
+     * instance each attempt (the triggering object may be stale after a
+     * re-enumeration) and re-enters the grant flow when permission is missing.
+     */
+    private fun scheduleOpenRetry(attempt: Int) {
+        if (attempt >= OPEN_RETRY_MAX_ATTEMPTS) {
+            Log.e("UsbEndpointManager", "Giving up opening device after $attempt retries - replug required")
+            return
+        }
+        val generation = openRetryGeneration
+        val delay = minOf(OPEN_RETRY_BASE_DELAY_MS * (attempt + 1), OPEN_RETRY_MAX_DELAY_MS)
+        Log.d("UsbEndpointManager", "Retrying open in ${delay}ms (attempt ${attempt + 1}/$OPEN_RETRY_MAX_ATTEMPTS)")
+        mainHandler.postDelayed({
+            if (generation != openRetryGeneration) return@postDelayed
+            val current = findTargetDevice()
+            if (current == null) {
+                Log.d("UsbEndpointManager", "Target device gone - stopping open retries (attach broadcast restarts them)")
+                return@postDelayed
+            }
+            if (isConnectedTo(current)) return@postDelayed
+            if (usbManager.hasPermission(current)) {
+                if (!openDevice(current)) scheduleOpenRetry(attempt + 1)
+            } else {
+                pollForManifestGrantAndOpen(current)
+            }
+        }, delay)
     }
 
     // Typed getParcelableExtra needs API 33; the untyped one is deprecated there.
@@ -153,6 +227,7 @@ class UsbEndpointManager(
                         if (it.vendorId == targetVendorId && it.productId == targetProductId) {
                             Log.d("UsbEndpointManager", "Target device detached, closing connection and resetting state")
                             requestingPermission = false
+                            openRetryGeneration++
                             closeDevice()
                         }
                     }
@@ -167,7 +242,7 @@ class UsbEndpointManager(
 
                         if (granted && device != null) {
                             Log.d("UsbEndpointManager", "USB permission granted, opening device")
-                            openDevice(device)
+                            if (!openDevice(device)) scheduleOpenRetry(attempt = 0)
                         } else {
                             if (device == null) {
                                 Log.w("UsbEndpointManager", "USB permission response received but device is null (even with fallback)")
@@ -260,8 +335,23 @@ class UsbEndpointManager(
         closeDevice()
     }
 
-    private fun openDevice(device: UsbDevice) {
+    /** Returns true when the device (or the same instance, via a racing caller) ends up open. */
+    private fun openDevice(device: UsbDevice): Boolean {
         Log.d("UsbEndpointManager", "openDevice called - requestingPermission=$requestingPermission, isConnected=$isConnected")
+
+        // A lingering connection to a PREVIOUS enumeration of the tracker
+        // (firmware reset re-enumerates faster than the DETACHED broadcast is
+        // processed) blocks the open below - tear it down first. Must happen
+        // outside connectionLock: closeDevice takes the transfer locks first
+        // (lock order readLock -> writeLock -> connectionLock).
+        val staleName = synchronized(connectionLock) {
+            val current = connectedDevice
+            if (connection != null && current != null && current.deviceName != device.deviceName) current.deviceName else null
+        }
+        if (staleName != null) {
+            Log.d("UsbEndpointManager", "Closing stale connection to $staleName before opening ${device.deviceName}")
+            closeDevice()
+        }
 
         try {
             synchronized(connectionLock) {
@@ -270,13 +360,13 @@ class UsbEndpointManager(
                 // first one through wins; later callers see a live connection and bail.
                 if (connection != null) {
                     Log.d("UsbEndpointManager", "openDevice: already have an open connection, skipping")
-                    return
+                    return true
                 }
                 connection = usbManager.openDevice(device)
                 if (connection == null) {
                     Log.e("UsbEndpointManager", "Failed to open USB device connection")
                     requestingPermission = false
-                    return
+                    return false
                 }
                 connectedDevice = device
 
@@ -290,7 +380,7 @@ class UsbEndpointManager(
                     connection = null
                     connectedDevice = null
                     requestingPermission = false
-                    return
+                    return false
                 }
 
                 for (i in 0 until usbInterface.endpointCount) {
@@ -314,7 +404,7 @@ class UsbEndpointManager(
                     endpointOut = null
                     connectedDevice = null
                     requestingPermission = false
-                    return
+                    return false
                 }
 
                 Log.d("UsbEndpointManager", "Successfully opened device: ${device.deviceName}, vendorId=${device.vendorId}, productId=${device.productId}")
@@ -326,6 +416,7 @@ class UsbEndpointManager(
                 onDeviceConnected(device)
                 onOpenedSession()
             }
+            return true
         } catch (e: Exception) {
             Log.e("UsbEndpointManager", "Exception in openDevice: ${e.message}", e)
             synchronized(readLock) {
@@ -336,6 +427,7 @@ class UsbEndpointManager(
                     }
                 }
             }
+            return false
         }
     }
 

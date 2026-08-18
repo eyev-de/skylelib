@@ -1,45 +1,32 @@
 package de.eyev.flutter_eap
 
 import android.content.Context
-import androidx.annotation.NonNull
-
+import io.flutter.Log
 import io.flutter.embedding.engine.plugins.FlutterPlugin
-import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
-import io.flutter.Log
-
 
 /**
- * FlutterEapPlugin - Android USB bridge for flutter_eap
+ * FlutterEapPlugin: Per-engine glue for the Skyle EAP client.
  *
- * This plugin handles:
- * - USB device connection/disconnection
- * - USB bulk transfers (read/write)
- * - Feeding received USB data to Dart FFI layer
- *
- * The actual EAP protocol parsing happens in the C library via FFI.
- * This plugin is just a USB I/O bridge.
- * 
- * IMPORTANT: This plugin may be attached to multiple Flutter engines (main app + overlays).
- * USB and native client initialization is only done once globally (from the first engine),
- * while secondary engines (overlays) only get method channel setup.
+ * The USB transport itself is owned process-wide by [EapUsbHost] (started by
+ * the accessibility service's service-ready hook, or - as an idempotent
+ * fallback - on the first engine attach). This plugin only:
+ *  - offers the "configureTransport" method for the Dart fresh-start path,
+ *  - tracks the engine's native callback-subscriber handle so
+ *    onDetachedFromEngine can remove exactly this engine's subscription
+ *    (the native fan-out keeps other engines' streams alive).
  */
 class FlutterEapPlugin: FlutterPlugin, MethodCallHandler {
 
-  companion object {
-    // Global static state - shared across all plugin instances
-    private var globalUsbManager: UsbEndpointManager? = null
-    private var isGloballyInitialized = false
-    private var isTransportConfigured = false
-    private var primaryMethodChannel: MethodChannel? = null
-  }
-
   private lateinit var methodChannel : MethodChannel
   private var context: Context? = null
-  private var isPrimaryInstance = false
+
+  // This engine's native callback-subscriber handle, reported by its Dart
+  // side after flutter_eap_add_callbacks. 0 = none registered.
+  private var subscriberHandle: Long = 0L
 
   override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
     methodChannel = MethodChannel(flutterPluginBinding.binaryMessenger, "flutter_eap/usb")
@@ -47,113 +34,50 @@ class FlutterEapPlugin: FlutterPlugin, MethodCallHandler {
 
     context = flutterPluginBinding.applicationContext
 
-    // Only initialize USB manager once globally (from first engine)
-    // NOTE: Transport configuration is deferred until Dart signals readiness
-    // This prevents race condition where C background thread starts before Dart callbacks are set
-    if (!isGloballyInitialized) {
-      isPrimaryInstance = true
-      primaryMethodChannel = methodChannel
-      initializeUsbManager()
-      Log.d("FlutterEapPlugin", "Plugin attached to PRIMARY engine - USB manager initialized (transport deferred)")
-    } else {
-      Log.d("FlutterEapPlugin", "Plugin attached to SECONDARY engine (overlay) - skipping USB init")
-    }
+    // Idempotent: no-op when the accessibility service already started the
+    // transport; brings it up for service-less setups (first run, tests).
+    val started = EapUsbHost.start(flutterPluginBinding.applicationContext)
+    Log.d("FlutterEapPlugin", "Plugin attached to engine - EapUsbHost.start -> $started")
   }
 
-  private fun initializeUsbManager() {
-    if (globalUsbManager != null) {
-      Log.d("FlutterEapPlugin", "USB manager already initialized globally")
-      return
+  private fun removeSubscriberIfSet() {
+    if (subscriberHandle == 0L) return
+    val clientPtr = EapClientJni.getInstance()
+    if (clientPtr != 0L) {
+      EapClientJni.removeSubscriber(clientPtr, subscriberHandle)
+      Log.d("FlutterEapPlugin", "Removed subscriber handle=$subscriberHandle")
     }
-
-    try {
-      // Create USB manager with callbacks - uses primary method channel
-      globalUsbManager = UsbEndpointManager(
-        context!!,
-        onDeviceConnected = { device ->
-          Log.d("FlutterEapPlugin", "USB device connected: ${device.deviceName}")
-          primaryMethodChannel?.invokeMethod("onUsbConnected", mapOf(
-            "vendorId" to device.vendorId,
-            "productId" to device.productId,
-            "deviceName" to device.deviceName
-          ))
-        },
-        onDeviceDisconnected = { device ->
-          Log.d("FlutterEapPlugin", "USB device disconnected: ${device.deviceName}")
-          primaryMethodChannel?.invokeMethod("onUsbDisconnected", null)
-        },
-        onOpenedSession = {
-          Log.d("FlutterEapPlugin", "USB session opened")
-          primaryMethodChannel?.invokeMethod("onUsbSessionOpened", null)
-        }
-      )
-
-      globalUsbManager?.registerReceiver()
-
-      // NOTE: Transport configuration is deferred until Dart calls "configureTransport"
-      // This prevents race condition where C background thread starts before Dart callbacks are set
-
-      isGloballyInitialized = true
-      Log.d("FlutterEapPlugin", "USB manager initialized, waiting for Dart to signal readiness")
-    } catch (e: Exception) {
-      Log.e("FlutterEapPlugin", "Error initializing USB manager: ${e.message}", e)
-    }
-  }
-
-  /**
-   * Configure native transport - called by Dart after callbacks are registered
-   * This starts the C background thread which will detect USB and begin handshake
-   *
-   * IMPORTANT: USB callbacks must be registered BEFORE starting the background thread
-   * to prevent race condition where the thread tries to read/write before callbacks are set.
-   */
-  private fun configureTransport(): Boolean {
-    if (isTransportConfigured) {
-      Log.d("FlutterEapPlugin", "Transport already configured")
-      return true
-    }
-
-    if (globalUsbManager == null) {
-      Log.e("FlutterEapPlugin", "Cannot configure transport: USB manager not initialized")
-      return false
-    }
-
-    try {
-      // Step 1: Get singleton client instance
-      val clientPtr = EapClientJni.getInstance()
-      if (clientPtr == 0L) {
-        Log.e("FlutterEapPlugin", "Failed to get singleton client instance")
-        return false
-      }
-
-      // Step 2: Register USB callbacks FIRST (before starting background thread)
-      // This prevents race condition where background thread detects USB device
-      // and tries to read/write before the JNI callbacks are registered.
-      EapClientJni.setUsbWriteCallback(clientPtr, globalUsbManager!!)
-      Log.d("FlutterEapPlugin", "USB write callback registered (clientPtr=$clientPtr)")
-
-      // Step 3: NOW configure transport (this starts the background thread)
-      val transportClientPtr = EapClientJni.createWithTransport()
-      if (transportClientPtr != 0L && transportClientPtr == clientPtr) {
-        Log.d("FlutterEapPlugin", "Transport configured successfully, background thread started")
-        isTransportConfigured = true
-        return true
-      } else {
-        Log.e("FlutterEapPlugin", "Failed to configure transport (returned=$transportClientPtr, expected=$clientPtr)")
-      }
-    } catch (e: Exception) {
-      Log.e("FlutterEapPlugin", "Error configuring transport: ${e.message}", e)
-    }
-    return false
+    subscriberHandle = 0L
   }
 
   override fun onMethodCall(call: MethodCall, result: Result) {
     when (call.method) {
       "configureTransport" -> {
-        // Called by Dart after callbacks are registered
-        // This starts the C background thread which will detect USB and begin handshake
-        val success = configureTransport()
-        result.success(success)
+        // Legacy Dart fresh-start path; now simply ensures the host is up.
+        val ctx = context
+        result.success(ctx != null && EapUsbHost.start(ctx))
+      }
+      "reportSubscriberHandle" -> {
+        // The engine's Dart side registered a native subscriber. On hot
+        // restart a new isolate re-registers without the old one detaching -
+        // reap the stale handle so the C thread cannot call into the dead
+        // isolate's NativeCallables.
+        val handle = (call.arguments as? Number)?.toLong() ?: 0L
+        if (subscriberHandle != 0L && subscriberHandle != handle) {
+          val clientPtr = EapClientJni.getInstance()
+          if (clientPtr != 0L) {
+            EapClientJni.removeSubscriber(clientPtr, subscriberHandle)
+            Log.d("FlutterEapPlugin", "Reaped stale subscriber handle=$subscriberHandle (hot restart)")
+          }
+        }
+        subscriberHandle = handle
+        result.success(true)
+      }
+      "clearSubscriberHandle" -> {
+        // Orderly Dart-side destroy: the Dart side already removed the native
+        // subscriber itself; just forget the bookkeeping.
+        subscriberHandle = 0L
+        result.success(true)
       }
       else -> result.notImplemented()
     }
@@ -162,25 +86,11 @@ class FlutterEapPlugin: FlutterPlugin, MethodCallHandler {
   override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
     methodChannel.setMethodCallHandler(null)
 
-    // Clear Dart callbacks before the Dart VM tears down NativeCallables.
-    // Without this the C background thread can call a closed NativeCallable
-    // and trigger DLRT_GetFfiCallbackMetadata -> abort().
-    val clientPtr = EapClientJni.getInstance()
-    if (clientPtr != 0L) {
-      EapClientJni.clearCallbacks(clientPtr)
-      Log.d("FlutterEapPlugin", "Dart callbacks cleared on engine detach")
-    }
-
-    // Only cleanup global resources if this is the primary instance being detached
-    if (isPrimaryInstance) {
-      Log.d("FlutterEapPlugin", "PRIMARY plugin detached from engine - cleaning up global resources")
-      globalUsbManager?.unregisterReceiver()
-      globalUsbManager = null
-      primaryMethodChannel = null
-      isGloballyInitialized = false
-      isTransportConfigured = false
-    } else {
-      Log.d("FlutterEapPlugin", "Secondary plugin detached from engine (overlay)")
-    }
+    // Remove ONLY this engine's callback subscriber before the Dart VM tears
+    // down its NativeCallables. Other engines' subscriptions - and the
+    // host-owned USB transport - stay untouched (this used to clear callbacks
+    // process-wide and tear down the USB manager, killing eye tracking
+    // whenever the main activity closed).
+    removeSubscriberIfSet()
   }
 }

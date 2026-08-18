@@ -23,6 +23,16 @@ class EapClientFfi {
   // Track if we've been destroyed to prevent double-destroy
   bool _isDestroyed = false;
 
+  // Multi-engine fan-out (Android): this engine's native subscriber handle.
+  // 0 = not registered via the subscriber API.
+  int _subscriberHandle = 0;
+
+  /// True when the multi-engine subscriber API should be used: Android, where
+  /// several Flutter engines (main app + accessibility overlays) share one
+  /// host-owned native client. Other platforms keep the single-subscriber
+  /// set/clear flow.
+  bool get _useSubscriberApi => Platform.isAndroid && _bindings?.addCallbacks != null;
+
   // NativeCallable listeners (for callbacks from native threads)
   NativeCallable<DartGazeCallback>? _gazeCallable;
   NativeCallable<DartPositioningCallback>? _positioningCallable;
@@ -64,6 +74,18 @@ class EapClientFfi {
   Stream<ConnectionState> get stateStream => _stateController.stream;
   Stream<String> get errorStream => _errorController.stream;
   Stream<EapLogMessage> get logStream => _logController.stream;
+
+  /// Current connection state read synchronously from the native client.
+  /// Needed because [stateStream] only carries transitions: after an in-process
+  /// engine recreation (hot restart, activity relaunch) the native client may
+  /// already be LINK_SYNCED and will never emit again, so new listeners must
+  /// seed from here. Returns disconnected before [create] has run.
+  ConnectionState get currentState {
+    final bindings = _bindings;
+    final clientPtr = _clientPtr;
+    if (bindings == null || clientPtr == null || _isDestroyed) return ConnectionState.disconnected;
+    return ConnectionState.fromValue(bindings.getState(clientPtr));
+  }
 
   /// Log lines streamed from the firmware over EAP. Distinct from [logStream],
   /// which carries diagnostics emitted by this Dart layer.
@@ -128,7 +150,9 @@ class EapClientFfi {
     // (getInstance creates on demand, so it always returns non-null)
     final isHotRestart = _bindings!.isInitialized();
 
-    if (isHotRestart) {
+    // Android uses the multi-engine fan-out path below and must NOT clear the
+    // whole callback table here - other engines' subscriptions live in it.
+    if (isHotRestart && !_useSubscriberApi) {
       // HOT RESTART PATH: Native client is alive (background thread running,
       // USB transport active). Just swap the Dart callback pointers.
       _emitLog(LogLevel.information, 'EapClientFfi', 'Hot restart detected - swapping callbacks (keeping connection alive)');
@@ -176,6 +200,42 @@ class EapClientFfi {
     // Register this instance for callback lookup
     _registerInstance(hashCode, this);
 
+    if (_useSubscriberApi) {
+      // MULTI-ENGINE PATH (Android): register this engine as an additional
+      // callback subscriber on the (possibly already running, host-owned)
+      // native client. Other engines' subscriptions stay untouched.
+      _clientPtr = _bindings!.getInstance();
+      if (_clientPtr == null || _clientPtr!.address == 0) {
+        _cleanup();
+        throw StateError('Failed to get native client instance');
+      }
+
+      final handle = _bindings!.addCallbacks!(_clientPtr!, _callbacksPtr!);
+      if (handle <= 0) {
+        _cleanup();
+        throw StateError('Failed to add callback subscriber (error: $handle)');
+      }
+      _subscriberHandle = handle;
+      _emitLog(LogLevel.information, 'EapClientFfi', 'Registered callback subscriber (handle=$handle)');
+
+      // Report the handle to the Kotlin plugin instance so onDetachedFromEngine
+      // can remove exactly this engine's subscription (and reap a stale handle
+      // from a previous isolate after hot restart).
+      unawaited(_reportSubscriberHandle(handle));
+
+      // The transport may already be LINK_SYNCED (host-owned, running since
+      // service start), in which case no state transition will ever reach this
+      // fresh engine - seed the stream with the current state.
+      final seededState = currentState;
+      _emitLog(LogLevel.information, 'EapClientFfi', 'Seeding connection state after subscribe: $seededState');
+      _stateController.add(seededState);
+
+      // Idempotent fallback: brings the transport up when the accessibility
+      // service has not (first run without the service, plain plugin usage).
+      unawaited(_configureTransport());
+      return;
+    }
+
     if (isHotRestart) {
       // Reuse existing native client - just install new callbacks
       _clientPtr = _bindings!.getInstance();
@@ -187,6 +247,13 @@ class EapClientFfi {
       }
 
       _emitLog(LogLevel.information, 'EapClientFfi', 'Callbacks swapped successfully - connection preserved');
+      // The native client may already be past its last state transition (e.g.
+      // LINK_SYNCED with the heartbeat running), in which case no state
+      // callback will ever fire for this new engine. Re-emit the current state
+      // for already-subscribed listeners; late subscribers seed via [currentState].
+      final seededState = currentState;
+      _emitLog(LogLevel.information, 'EapClientFfi', 'Seeding connection state after swap: $seededState');
+      _stateController.add(seededState);
       // Skip transport configuration - it's still running from before hot restart
       return;
     }
@@ -213,6 +280,17 @@ class EapClientFfi {
     // macOS: C configures IOKit USB transport directly
     if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS || Platform.isWindows) {
       _configureTransport();
+    }
+  }
+
+  /// Report this engine's native subscriber handle to its Kotlin plugin
+  /// instance. Kotlin removes the subscription in onDetachedFromEngine (engine
+  /// death) and reaps a stale handle when a hot-restarted isolate re-registers.
+  Future<void> _reportSubscriberHandle(int handle) async {
+    try {
+      await _methodChannel.invokeMethod<bool>('reportSubscriberHandle', handle);
+    } catch (e) {
+      _emitLog(LogLevel.warning, 'EapClientFfi', 'Failed to report subscriber handle: $e');
     }
   }
 
@@ -251,6 +329,27 @@ class EapClientFfi {
     _isDestroyed = true;
 
     _emitLog(LogLevel.information, 'EapClientFfi', 'destroy() called - starting cleanup');
+
+    if (_useSubscriberApi && _subscriberHandle != 0) {
+      // MULTI-ENGINE PATH (Android): remove only this engine's subscriber.
+      // The removal is mutex-synchronized with the dispatch thread, so after
+      // it returns no native thread can invoke our NativeCallables. The
+      // host-owned client itself is never destroyed from Dart (the native
+      // flutter_eap_destroy is a no-op while host-owned anyway).
+      if (_clientPtr != null && _bindings != null) {
+        _bindings!.removeCallbacks!(_clientPtr!, _subscriberHandle);
+        _emitLog(LogLevel.debug, 'EapClientFfi', 'Removed callback subscriber (handle=$_subscriberHandle)');
+      }
+      _subscriberHandle = 0;
+      _clientPtr = null;
+      // Tell Kotlin the handle is gone so onDetachedFromEngine won't remove it again.
+      unawaited(_methodChannel.invokeMethod<bool>('clearSubscriberHandle').catchError((_) => false));
+
+      _unregisterInstance(hashCode);
+      _cleanup();
+      _emitLog(LogLevel.information, 'EapClientFfi', 'destroy() complete (subscriber removed)');
+      return;
+    }
 
     // Step 1: Clear callbacks in native code FIRST
     // This prevents the native background thread from invoking Dart callbacks

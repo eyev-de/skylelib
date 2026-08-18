@@ -77,6 +77,14 @@ typedef FlutterEapSetCallbacks = int Function(Pointer<EapClientNative> client, P
 typedef FlutterEapClearCallbacksNative = Void Function(Pointer<EapClientNative> client);
 typedef FlutterEapClearCallbacks = void Function(Pointer<EapClientNative> client);
 
+// Multi-engine callback fan-out (Android bridge only): each Flutter engine
+// registers its own subscriber and receives every callback independently.
+typedef FlutterEapAddCallbacksNative = Int64 Function(Pointer<EapClientNative> client, Pointer<FlutterEapCallbacks> callbacks);
+typedef FlutterEapAddCallbacks = int Function(Pointer<EapClientNative> client, Pointer<FlutterEapCallbacks> callbacks);
+
+typedef FlutterEapRemoveCallbacksNative = Int32 Function(Pointer<EapClientNative> client, Int64 handle);
+typedef FlutterEapRemoveCallbacks = int Function(Pointer<EapClientNative> client, int handle);
+
 typedef FlutterEapDestroyNative = Void Function(Pointer<EapClientNative> client);
 typedef FlutterEapDestroy = void Function(Pointer<EapClientNative> client);
 
@@ -163,6 +171,11 @@ class EapClientBindings {
   // feedUsbData, getPendingWrite, clearPendingWrite REMOVED
   late final FlutterEapGetState getState;
   late final FlutterEapGetLastError getLastError;
+
+  /// Multi-engine callback fan-out. Only the Android bridge exports these
+  /// symbols; null on the other platforms (which stay single-subscriber).
+  late final FlutterEapAddCallbacks? addCallbacks;
+  late final FlutterEapRemoveCallbacks? removeCallbacks;
   late final FlutterEapFree? nativeFree;
 
   /// Native function pointer for flutter_eap_free, suitable for
@@ -226,6 +239,15 @@ class EapClientBindings {
     } catch (_) {
       nativeFree = null;
       nativeFreeFinalizer = null;
+    }
+
+    // Multi-engine fan-out symbols exist only in the Android bridge.
+    try {
+      addCallbacks = _dylib.lookup<NativeFunction<FlutterEapAddCallbacksNative>>('flutter_eap_add_callbacks').asFunction();
+      removeCallbacks = _dylib.lookup<NativeFunction<FlutterEapRemoveCallbacksNative>>('flutter_eap_remove_callbacks').asFunction();
+    } catch (_) {
+      addCallbacks = null;
+      removeCallbacks = null;
     }
   }
 }

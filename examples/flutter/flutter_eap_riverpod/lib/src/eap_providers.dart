@@ -103,11 +103,15 @@ EapVideo eapVideo(Ref ref) {
   return client as EapVideo;
 }
 
-/// Stream provider for connection state
+/// Stream provider for connection state.
+/// Seeded with the current native state: after an in-process engine recreation
+/// (hot restart, activity relaunch) the native client may already be
+/// LINK_SYNCED and the stream alone would never emit for this engine.
 @Riverpod(keepAlive: true)
-Stream<ConnectionState> eapConnectionStateStream(Ref ref) {
+Stream<ConnectionState> eapConnectionStateStream(Ref ref) async* {
   final client = ref.watch(eapClientProvider);
-  return client.stateStream;
+  yield client.currentState;
+  yield* client.stateStream;
 }
 
 /// Current connection state (from stream)

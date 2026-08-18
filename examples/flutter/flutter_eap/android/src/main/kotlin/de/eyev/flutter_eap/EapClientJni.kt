@@ -62,6 +62,24 @@ object EapClientJni {
      * @param clientPtr Native pointer to eap_client
      */
     external fun clearCallbacks(clientPtr: Long)
+
+    /**
+     * Mark the transport as owned by the Kotlin host (accessibility service).
+     * While owned, Dart-initiated destroy/disconnect are no-ops and connect
+     * only acts from the DISCONNECTED state - no Flutter engine teardown can
+     * disrupt the shared link.
+     */
+    external fun setHostOwned(owned: Boolean)
+
+    /**
+     * Remove one engine's callback subscriber (fan-out slot). Called from
+     * onDetachedFromEngine with the handle the engine's Dart side reported.
+     * Safe with stale or unknown handles (no-op).
+     *
+     * @param clientPtr Native pointer to eap_client
+     * @param handle Subscriber handle returned by flutter_eap_add_callbacks
+     */
+    external fun removeSubscriber(clientPtr: Long, handle: Long)
 }
 
 /**

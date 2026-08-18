@@ -171,6 +171,11 @@ class EapClient implements EapControl, EapGaze, EapPositioning, EapVideo, EapVer
   /// Stream of connection state changes
   Stream<ConnectionState> get stateStream => _ffi.stateStream;
 
+  /// Current connection state read synchronously from the native client.
+  /// Use to seed new listeners: [stateStream] only carries transitions, so a
+  /// listener created after the link came up would otherwise never see a value.
+  ConnectionState get currentState => _ffi.currentState;
+
   /// Stream of error messages
   Stream<String> get errorStream => _ffi.errorStream;
 

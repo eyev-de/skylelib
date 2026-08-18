@@ -195,6 +195,9 @@ typedef struct {
     void* user_data;  // Passed back to all callbacks
 } flutter_eap_callbacks;
 
+/** Maximum number of concurrent callback subscribers (Flutter engines). */
+#define FLUTTER_EAP_MAX_SUBSCRIBERS 8
+
 // =============================================================================
 // Public API Functions
 // =============================================================================
@@ -250,6 +253,41 @@ eap_client* flutter_eap_get_instance(void);
  * @return 0 on success, negative error code on failure
  */
 int flutter_eap_set_callbacks(eap_client* client, const flutter_eap_callbacks* callbacks);
+
+/**
+ * Register an ADDITIONAL callback subscriber (multi-engine fan-out).
+ * Each subscriber receives every callback for which it registered a non-NULL
+ * function pointer. Heap payloads (video frames, log / file-status strings)
+ * are allocated per subscriber; each Dart side frees its own copy with
+ * flutter_eap_free(). Calibration-result arrays are deep-copied per subscriber
+ * slot and stay bridge-owned (freed on next dispatch or removal), matching the
+ * existing Dart no-free semantics.
+ * Installs the C adapters on the core client if not yet installed.
+ *
+ * @return handle > 0 on success; -1 on invalid args; -2 when the table is full.
+ */
+int64_t flutter_eap_add_callbacks(eap_client* client, const flutter_eap_callbacks* callbacks);
+
+/**
+ * Remove one callback subscriber. Idempotent: unknown or stale handles return
+ * -1 and do nothing. After return (synchronized with dispatch via the callback
+ * mutex) the subscriber's function pointers can no longer be invoked - the safe
+ * point for the owner to close its NativeCallables.
+ * Does NOT unregister the C adapters from the core client, even when the table
+ * empties - other engines may subscribe later.
+ *
+ * @return 0 on success, -1 if the handle was not found.
+ */
+int flutter_eap_remove_callbacks(eap_client* client, int64_t handle);
+
+/**
+ * Mark the transport as owned by the Kotlin host (accessibility service).
+ * While owned, flutter_eap_destroy() and flutter_eap_disconnect() called from
+ * Dart become logged no-ops, and flutter_eap_connect() only acts when the
+ * client is in EAP_STATE_DISCONNECTED. This protects the shared link from
+ * per-engine teardown paths.
+ */
+void flutter_eap_set_host_owned(bool owned);
 
 /**
  * Set Kotlin USB transport callbacks (called from JNI)

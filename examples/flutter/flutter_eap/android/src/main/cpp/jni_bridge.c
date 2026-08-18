@@ -134,3 +134,40 @@ Java_de_eyev_flutter_1eap_EapClientJni_getState(
     eap_client* client = (eap_client*)(uintptr_t)clientPtr;
     return flutter_eap_get_state(client);
 }
+
+/**
+ * Mark the transport as owned by the Kotlin host (accessibility service).
+ * While owned, Dart-initiated destroy/disconnect are no-ops and connect only
+ * acts from DISCONNECTED.
+ */
+JNIEXPORT void JNICALL
+Java_de_eyev_flutter_1eap_EapClientJni_setHostOwned(
+    JNIEnv* env,
+    jobject obj,
+    jboolean owned
+) {
+    (void)env;
+    (void)obj;
+    flutter_eap_set_host_owned(owned == JNI_TRUE);
+}
+
+/**
+ * Remove one engine's callback subscriber (fan-out slot).
+ * Called from onDetachedFromEngine with the handle the engine's Dart side
+ * reported, so the C dispatch thread cannot invoke a closed NativeCallable.
+ * Safe with stale/unknown handles (no-op).
+ */
+JNIEXPORT void JNICALL
+Java_de_eyev_flutter_1eap_EapClientJni_removeSubscriber(
+    JNIEnv* env,
+    jobject obj,
+    jlong clientPtr,
+    jlong handle
+) {
+    (void)env;
+    (void)obj;
+    if (clientPtr == 0 || handle <= 0) return;
+    eap_client* client = (eap_client*)(uintptr_t)clientPtr;
+    int result = flutter_eap_remove_callbacks(client, (int64_t)handle);
+    LOGD("removeSubscriber: handle=%lld -> %d", (long long)handle, result);
+}
