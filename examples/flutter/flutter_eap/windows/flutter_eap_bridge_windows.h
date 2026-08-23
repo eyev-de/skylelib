@@ -21,102 +21,16 @@ extern "C" {
 #endif
 
 /* =========================================================================
- * Dart FFI Callback Function Pointer Types
- * Same as Apple/Android bridges - passing complete C structs by value
+ * Callback types + registration
+ *
+ * Windows runs the shared multi-engine subscriber fan-out: the callback
+ * typedefs, the flutter_eap_callbacks struct, and the add/remove export
+ * contracts come from the shared module header (single source of truth for
+ * the Dart-shared ABI); this bridge defines the exported wrappers in
+ * flutter_eap_bridge_windows.c.
  * ========================================================================= */
 
-typedef void (*dart_gaze_callback)(
-    eap_gaze_response gaze,
-    void* user_data
-);
-
-typedef void (*dart_positioning_callback)(
-    eap_positioning_response positioning,
-    void* user_data
-);
-
-typedef void (*dart_version_callback)(
-    eap_version_response version,
-    void* user_data
-);
-
-typedef void (*dart_control_callback)(
-    eap_control_message control,
-    void* user_data
-);
-
-typedef void (*dart_calibration_point_callback)(
-    eap_next_calibration_point point,
-    void* user_data
-);
-
-typedef void (*dart_calibration_progress_callback)(
-    eap_collecting_calibration_points progress,
-    void* user_data
-);
-
-typedef void (*dart_calibration_paused_callback)(
-    void* user_data
-);
-
-typedef void (*dart_calibration_finished_callback)(
-    eap_finished_calibration result,
-    void* user_data
-);
-
-typedef void (*dart_state_callback)(
-    int state,
-    void* user_data
-);
-
-typedef void (*dart_video_callback)(
-    const uint8_t* data,
-    uint32_t length,
-    uint16_t width,
-    uint16_t height,
-    uint8_t channels,
-    void* user_data
-);
-
-typedef void (*dart_file_status_callback)(
-    uint16_t status,
-    uint16_t progress,
-    const char* error_message,
-    void* user_data
-);
-
-typedef void (*dart_logging_callback)(
-    uint8_t level,
-    const char* message,
-    int64_t timestamp_ms,
-    void* user_data
-);
-
-typedef void (*dart_error_callback)(
-    const char* error_message,
-    void* user_data
-);
-
-/* =========================================================================
- * Callback Registration Structure
- * ========================================================================= */
-
-typedef struct {
-    dart_gaze_callback on_gaze;
-    dart_positioning_callback on_positioning;
-    dart_version_callback on_version;
-    dart_control_callback on_control;
-    dart_calibration_point_callback on_calibration_point;
-    dart_calibration_progress_callback on_calibration_progress;
-    dart_calibration_paused_callback on_calibration_paused;
-    dart_calibration_finished_callback on_calibration_finished;
-    dart_video_callback on_video;
-    dart_file_status_callback on_file_status;
-    dart_logging_callback on_logging;
-    dart_state_callback on_state_change;
-    dart_error_callback on_error;
-    void* user_data;
-} flutter_eap_callbacks;
+#include "../native/fanout/flutter_eap_fanout.h"
 
 /* =========================================================================
  * Public API Functions (same symbols as Apple/Android bridges for Dart FFI)
@@ -212,6 +126,12 @@ void flutter_eap_free(void* ptr);
 /**
  * Configure USB transport for Windows (convenience function)
  * Creates a USB transport and sets it on the client.
+ *
+ * The first successful call also registers the Skyle Link USB ownership
+ * callback (skyle_link_set_usb_ownership_callback): during supervisor
+ * handovers the bridge destroys the WinUSB transport on release (closing the
+ * OS device claim so another app can take the tracker) and recreates it with
+ * the same VID/PID on reacquire.
  *
  * @param client Client pointer from flutter_eap_get_instance()
  * @param vendor_id USB vendor ID (e.g., 0x3729)

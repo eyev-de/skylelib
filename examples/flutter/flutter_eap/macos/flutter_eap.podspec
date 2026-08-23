@@ -19,38 +19,44 @@ handling with an FFI bridge to Dart. macOS uses IOKit for USB bulk transfers.
 
   s.source           = { :path => '.' }
 
-  # Classes/ contains:
-  # - FlutterEapPlugin.swift  (plugin registration + IOKit transport wiring)
-  # - flutter_eap_macos.h     (umbrella header for Swift-C interop)
-  # - skylelib_unity.c        (compiles only the shared Apple FFI bridge;
-  #                            skylelib itself is linked prebuilt, see below)
-  s.source_files = 'Classes/**/*.{swift,h,c}'
+  # Sources live in the Swift Package Manager layout (dual support - the
+  # package at flutter_eap/Package.swift compiles the SAME files):
+  # - flutter_eap/Sources/flutter_eap/FlutterEapPlugin.swift
+  #     (plugin registration + IOKit transport wiring)
+  # - flutter_eap/Sources/flutter_eap_bridge/include/flutter_eap_macos.h
+  #     (umbrella header for Swift-C interop)
+  # - flutter_eap/Sources/flutter_eap_bridge/skylelib_unity.c
+  #     (compiles only the shared Apple FFI bridge; skylelib itself is linked
+  #      prebuilt, see below)
+  s.source_files = 'flutter_eap/Sources/**/*.{swift,h,c}'
 
-  s.public_header_files = 'Classes/flutter_eap_macos.h'
+  s.public_header_files = 'flutter_eap/Sources/flutter_eap_bridge/include/flutter_eap_macos.h'
 
   s.dependency 'FlutterMacOS'
   s.platform = :osx, '10.15'
   s.frameworks = 'IOKit', 'CoreFoundation'
 
   # --- Prebuilt skylelib (release-pipeline artifact) ---------------------------
-  # Consume skylelib.xcframework instead of compiling skylelib from source — the
+  # Consume skylelib.xcframework instead of compiling skylelib from source - the
   # same artifact the SwiftUI example links. Resolution order (see
-  # darwin/skylelib_prebuilt.rb): SKYLELIB_DIST env → the skylelib source tree's
-  # dist/ → download the GitHub release matching the plugin version into
+  # darwin/skylelib_prebuilt.rb): SKYLELIB_DIST env -> the skylelib source tree's
+  # dist/ -> download the GitHub release matching the plugin version into
   # <plugin>/.skylelib/ (the path taken when consumed as a pub git dependency).
-  # The xcframework is then copied into macos/.skylelib/ and vendored, so
-  # CocoaPods links libskylelib.a into the target that performs the final link
-  # (works for both dynamic and static `use_frameworks!` linkage).
-  # NOTE: resolve the Flutter plugin symlink (…/ephemeral/.symlinks/plugins/…)
-  # to the real vendored location — File.expand_path alone keeps the symlink path.
+  # The xcframework is then copied into macos/flutter_eap/.skylelib/ - INSIDE
+  # the Swift package, so the same copy serves as Package.swift's local
+  # binaryTarget - and vendored, so CocoaPods links libskylelib.a into the
+  # target that performs the final link (works for both dynamic and static
+  # `use_frameworks!` linkage).
+  # NOTE: resolve the Flutter plugin symlink (.../ephemeral/.symlinks/plugins/...)
+  # to the real vendored location - File.expand_path alone keeps the symlink path.
   here  = File.realpath(__dir__)
-  s.vendored_frameworks = skylelib_vendor_xcframework(here)
-  slice = '${PODS_TARGET_SRCROOT}/.skylelib/skylelib.xcframework/macos-arm64_x86_64'
+  s.vendored_frameworks = skylelib_vendor_xcframework(here, File.join('flutter_eap', '.skylelib'))
+  slice = '${PODS_TARGET_SRCROOT}/flutter_eap/.skylelib/skylelib.xcframework/macos-arm64_x86_64'
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
-    # Bridge uses flat includes (<eap_client.h>); the shipped headers use
-    # namespaced ones (<skylelib/...>). Expose both roots.
+    # The bridge uses namespaced includes (<skylelib/...>); the flat root is
+    # kept for compatibility with older flat includes.
     'HEADER_SEARCH_PATHS' => [
       "\"#{slice}/Headers\"",
       "\"#{slice}/Headers/skylelib\"",

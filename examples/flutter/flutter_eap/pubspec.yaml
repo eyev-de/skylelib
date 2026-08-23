@@ -4,11 +4,12 @@ homepage: https://github.com/eyev-de/skylelib
 # Version tracks the skylelib SDK version (single SemVer for the whole SDK,
 # bumped by tag.sh). The native builds download the GitHub release asset
 # matching this version when no local dist/ is available.
-version: 1.4.0
+version: 1.5.0
 
 environment:
   sdk: ^3.7.0
-  flutter: ">=3.27.0"
+  # >=3.29: PlatformDispatcher.engineId (primary-engine guard owner token).
+  flutter: ">=3.29.0"
 
 dependencies:
   crypto: ^3.0.3

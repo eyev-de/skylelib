@@ -17,6 +17,7 @@ export 'control/display_info.dart';
 export 'gaze/gaze_data.dart';
 export 'gaze/gazes_data.dart';
 export 'gaze/gaze_type.dart';
+export 'link/skyle_link.dart';
 export 'logging/log_level.dart';
 export 'logging/log_message.dart';
 export 'positioning/face_data.dart';

@@ -16,7 +16,11 @@ class UsbEndpointManager(
     private val context: Context,
     private val onDeviceConnected: (UsbDevice) -> Unit,
     private val onDeviceDisconnected: (UsbDevice) -> Unit,
-    private val onOpenedSession: () -> Unit
+    private val onOpenedSession: () -> Unit,
+    // Fired when the USB capability (tracker attached AND permission held)
+    // changes - the host re-pushes the Skyle Link identity so the supervisor
+    // re-evaluates its election eligibility. Called on the main looper.
+    private val onUsbCapableChanged: (Boolean) -> Unit = {}
 ) : UsbTransportCallback {
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
     private val connectionLock = Any()
@@ -77,6 +81,65 @@ class UsbEndpointManager(
     // moved on.
     private var openRetryGeneration = 0
 
+    // Skyle Link supervisor USB ownership gate: the device is opened/claimed
+    // ONLY while the C supervisor has granted ownership. The permission flows
+    // (manifest grant poll, explicit dialog) keep running regardless - the
+    // permission is the supervisor's election eligibility (usb_capable), the
+    // open is the granted ownership. Confined to the main looper: every open/
+    // close path already runs there, and setOwnershipWanted posts.
+    private var ownershipWanted = false
+
+    /**
+     * Grant (wanted=true) or revoke (wanted=false) USB ownership. Called from
+     * the supervisor's ownership callback, which fires on native supervisor
+     * threads - the USB work is hopped onto the main looper here. Grant opens
+     * the device immediately when it is present and permitted (the permission
+     * flow / next attach broadcast picks it up otherwise); revoke cancels
+     * pending open retries and closes the device, releasing the interface
+     * claim for the next owner.
+     */
+    fun setOwnershipWanted(wanted: Boolean) {
+        mainHandler.post {
+            if (ownershipWanted == wanted) return@post
+            ownershipWanted = wanted
+            Log.d("UsbEndpointManager", "Supervisor USB ownership -> $wanted")
+            if (wanted) {
+                val device = findTargetDevice()
+                if (device == null) {
+                    Log.d("UsbEndpointManager", "Ownership granted but no device attached - waiting for attach broadcast")
+                    return@post
+                }
+                if (usbManager.hasPermission(device)) {
+                    if (!openDevice(device)) scheduleOpenRetry(attempt = 0)
+                } else {
+                    pollForManifestGrantAndOpen(device)
+                }
+            } else {
+                openRetryGeneration++
+                closeDevice()
+            }
+        }
+    }
+
+    /** Tracker attached AND platform USB permission held. No claim, no dialog. */
+    fun hasUsbPermission(): Boolean {
+        val device = findTargetDevice() ?: return false
+        return usbManager.hasPermission(device)
+    }
+
+    /**
+     * The single ownership choke point for "permission is ready, open now"
+     * paths. Without a grant the permission result is only reported upward
+     * (usb_capable) and the open is left to a later setOwnershipWanted(true).
+     */
+    private fun openIfOwnershipWanted(device: UsbDevice) {
+        if (!ownershipWanted) {
+            Log.d("UsbEndpointManager", "Permission ready for ${device.deviceName} but USB ownership not granted - not opening")
+            return
+        }
+        if (!openDevice(device)) scheduleOpenRetry(attempt = 0)
+    }
+
     private val ACTION_USB_PERMISSION = "${context.packageName}.USB_PERMISSION"
     private val USB_PERMISSION_REQUEST_CODE = 0
 
@@ -106,8 +169,9 @@ class UsbEndpointManager(
             return
         }
         if (usbManager.hasPermission(device)) {
-            Log.d("UsbEndpointManager", "Manifest grant landed after $attempt attempt(s), opening device")
-            if (!openDevice(device)) scheduleOpenRetry(attempt = 0)
+            Log.d("UsbEndpointManager", "Manifest grant landed after $attempt attempt(s)")
+            onUsbCapableChanged(true)
+            openIfOwnershipWanted(device)
             return
         }
         if (attempt >= GRANT_POLL_MAX_ATTEMPTS) {
@@ -133,9 +197,10 @@ class UsbEndpointManager(
 
         // Check if permission is already granted
         if (usbManager.hasPermission(device)) {
-            Log.d("UsbEndpointManager", "Permission already granted, opening device directly")
+            Log.d("UsbEndpointManager", "Permission already granted")
             requestingPermission = false
-            if (!openDevice(device)) scheduleOpenRetry(attempt = 0)
+            onUsbCapableChanged(true)
+            openIfOwnershipWanted(device)
             return
         }
 
@@ -181,6 +246,10 @@ class UsbEndpointManager(
         Log.d("UsbEndpointManager", "Retrying open in ${delay}ms (attempt ${attempt + 1}/$OPEN_RETRY_MAX_ATTEMPTS)")
         mainHandler.postDelayed({
             if (generation != openRetryGeneration) return@postDelayed
+            if (!ownershipWanted) {
+                Log.d("UsbEndpointManager", "USB ownership revoked - stopping open retries")
+                return@postDelayed
+            }
             val current = findTargetDevice()
             if (current == null) {
                 Log.d("UsbEndpointManager", "Target device gone - stopping open retries (attach broadcast restarts them)")
@@ -229,6 +298,8 @@ class UsbEndpointManager(
                             requestingPermission = false
                             openRetryGeneration++
                             closeDevice()
+                            // Device gone -> not usb_capable until it reattaches.
+                            onUsbCapableChanged(false)
                         }
                     }
                 }
@@ -241,13 +312,15 @@ class UsbEndpointManager(
                         Log.d("UsbEndpointManager", "Permission response - device: ${device?.deviceName}, granted: $granted")
 
                         if (granted && device != null) {
-                            Log.d("UsbEndpointManager", "USB permission granted, opening device")
-                            if (!openDevice(device)) scheduleOpenRetry(attempt = 0)
+                            Log.d("UsbEndpointManager", "USB permission granted")
+                            onUsbCapableChanged(true)
+                            openIfOwnershipWanted(device)
                         } else {
                             if (device == null) {
                                 Log.w("UsbEndpointManager", "USB permission response received but device is null (even with fallback)")
                             } else {
                                 Log.w("UsbEndpointManager", "USB permission denied by user")
+                                onUsbCapableChanged(false)
                             }
                         }
                         // Always reset flag after permission response

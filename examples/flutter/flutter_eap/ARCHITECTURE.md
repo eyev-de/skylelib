@@ -33,8 +33,13 @@ Two callback chains exist on every platform:
 
 1. **Transport callbacks** -- raw USB read/write, provided by the platform layer
    to the C library via function pointers.
-2. **Message callbacks** -- parsed EAP messages, provided by Dart to the C bridge
-   via `flutter_eap_set_callbacks()`.
+2. **Message callbacks** -- parsed EAP messages, delivered to Dart through the
+   multi-engine subscriber fan-out on all pull-mode platforms (Android, macOS,
+   Windows, Linux): each Flutter engine registers its own subscriber via
+   `flutter_eap_add_callbacks()` / `flutter_eap_add_callbacks_engine()` and
+   receives every callback independently (shared module:
+   `native/fanout/flutter_eap_fanout.c`). iOS stays single-slot
+   (`flutter_eap_set_callbacks()`, push mode, one engine).
 
 ## Shared Dart FFI Layer
 
@@ -47,10 +52,16 @@ All platforms share the same Dart code in `lib/src/ffi/eap_client_ffi.dart`.
    positioning, version, control, calibration, video, file status, state, error).
    These are thread-safe: the C background thread can invoke them and Dart
    receives the call on its isolate.
-3. Allocate a `FlutterEapCallbacks` struct, fill it with the native function
-   pointers from step 2, and call `flutter_eap_set_callbacks()`.
+3. Allocate a `FlutterEapCallbacks` struct and fill it with the native function
+   pointers from step 2. On the fan-out platforms register it as this engine's
+   subscriber (`flutter_eap_add_callbacks()` on Android, where Kotlin reaps a
+   hot-restarted engine's stale handle, `flutter_eap_add_callbacks_engine()` on
+   desktop, where a re-add with the same engine token -
+   `PlatformDispatcher.engineId`, which survives hot restart - reaps it
+   natively); on iOS call `flutter_eap_set_callbacks()`.
 4. Call `_configureTransport()` via `MethodChannel('flutter_eap/usb')` --
-   this triggers the platform plugin to set up USB I/O.
+   this triggers the platform plugin to set up USB I/O (idempotent: the
+   platform layer configures the transport once per process).
 
 ### Sending a command (e.g. `enableGaze()`)
 
@@ -109,9 +120,9 @@ application-layer EAP data, and the connection state jumps straight to
 
 | File | Role |
 |------|------|
-| `ios/Classes/FlutterEapPlugin.swift` | Plugin entry point, EAAccessory management, StreamDelegate |
-| `ios/Classes/OutputStreamManager.swift` | Async output stream writer with backpressure |
-| `ios/Classes/BoundedQueue.swift` | Thread-safe bounded FIFO queue |
+| `ios/flutter_eap/Sources/flutter_eap/FlutterEapPlugin.swift` | Plugin entry point, EAAccessory management, StreamDelegate |
+| `ios/flutter_eap/Sources/flutter_eap/OutputStreamManager.swift` | Async output stream writer with backpressure |
+| `ios/flutter_eap/Sources/flutter_eap/BoundedQueue.swift` | Thread-safe bounded FIFO queue |
 | `darwin/Classes/flutter_eap_bridge_apple.c` | C bridge (shared with macOS), push-mode functions |
 
 ### Connection Setup
@@ -253,7 +264,7 @@ uses a pull-based model with a C background thread, but all USB I/O is pure C.
 
 | File | Role |
 |------|------|
-| `macos/Classes/FlutterEapPlugin.swift` | Plugin entry, triggers IOKit transport config |
+| `macos/flutter_eap/Sources/flutter_eap/FlutterEapPlugin.swift` | Plugin entry, triggers IOKit transport config |
 | `darwin/Classes/flutter_eap_bridge_apple.c` | C bridge (shared with iOS) |
 | `native/skylelib/src/eap_transport_iokit.c` | IOKit USB transport: device discovery, read, write |
 
@@ -407,8 +418,8 @@ Riverpod providers live in the sibling `flutter_eap_riverpod` package
 
 | File | Purpose |
 |------|---------|
-| `ios/Classes/FlutterEapPlugin.swift` | EAAccessory management, StreamDelegate, push transport |
-| `ios/Classes/OutputStreamManager.swift` | Backpressured async output stream writer |
+| `ios/flutter_eap/Sources/flutter_eap/FlutterEapPlugin.swift` | EAAccessory management, StreamDelegate, push transport |
+| `ios/flutter_eap/Sources/flutter_eap/OutputStreamManager.swift` | Backpressured async output stream writer |
 
 ### Android
 
@@ -422,7 +433,7 @@ Riverpod providers live in the sibling `flutter_eap_riverpod` package
 
 | File | Purpose |
 |------|---------|
-| `macos/Classes/FlutterEapPlugin.swift` | Plugin entry, triggers IOKit transport config |
+| `macos/flutter_eap/Sources/flutter_eap/FlutterEapPlugin.swift` | Plugin entry, triggers IOKit transport config |
 
 ### Shared Apple (iOS + macOS)
 

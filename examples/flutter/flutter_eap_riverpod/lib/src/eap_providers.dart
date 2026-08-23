@@ -114,6 +114,17 @@ Stream<ConnectionState> eapConnectionStateStream(Ref ref) async* {
   yield* client.stateStream;
 }
 
+/// Stream provider for the Skyle Link eye-control suspension state.
+/// Seeded with the current native cached state (a suspension may already be
+/// active when this engine subscribes), then follows every change broadcast
+/// by the hub / local link.
+@Riverpod(keepAlive: true)
+Stream<SkyleLinkSuspendState> eapSuspension(Ref ref) async* {
+  final client = ref.watch(eapClientProvider);
+  yield client.currentSuspensionState;
+  yield* client.suspensionStream;
+}
+
 /// Current connection state (from stream)
 @Riverpod(keepAlive: true)
 ConnectionState eapConnectionState(Ref ref) {

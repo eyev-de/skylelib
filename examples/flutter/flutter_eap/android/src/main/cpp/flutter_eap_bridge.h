@@ -16,187 +16,15 @@
 #include <stdbool.h>
 #include <eap_client.h>
 
+// Shared multi-engine subscriber fan-out (all pull-mode platforms). Single
+// source of truth for the Dart callback typedefs, the flutter_eap_callbacks
+// struct, FLUTTER_EAP_MAX_SUBSCRIBERS, and the add/remove export contracts;
+// this bridge defines the exported wrappers around it.
+#include "flutter_eap_fanout.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-// =============================================================================
-// Dart FFI Callback Function Pointer Types
-// Now passing complete C structs instead of primitives
-// =============================================================================
-
-/**
- * Gaze data callback (struct by value)
- * @param gaze eap_gaze_response struct passed by value
- * @param user_data User data pointer passed from Dart
- */
-typedef void (*dart_gaze_callback)(
-    eap_gaze_response gaze,
-    void* user_data
-);
-
-/**
- * Positioning data callback (struct by value)
- * @param positioning eap_positioning_response struct passed by value
- * @param user_data User data pointer
- */
-typedef void (*dart_positioning_callback)(
-    eap_positioning_response positioning,
-    void* user_data
-);
-
-/**
- * Version callback (struct by value)
- * @param version eap_version_response struct passed by value
- * @param user_data User data pointer
- */
-typedef void (*dart_version_callback)(
-    eap_version_response version,
-    void* user_data
-);
-
-/**
- * Control callback (struct by value)
- * @param control eap_control_message struct passed by value
- * @param user_data User data pointer
- */
-typedef void (*dart_control_callback)(
-    eap_control_message control,
-    void* user_data
-);
-
-/**
- * Calibration point callback (struct by value)
- * @param point eap_next_calibration_point struct passed by value
- * @param user_data User data pointer
- */
-typedef void (*dart_calibration_point_callback)(
-    eap_next_calibration_point point,
-    void* user_data
-);
-
-/**
- * Calibration progress callback (struct by value)
- * @param progress eap_collecting_calibration_points struct passed by value
- * @param user_data User data pointer
- */
-typedef void (*dart_calibration_progress_callback)(
-    eap_collecting_calibration_points progress,
-    void* user_data
-);
-
-/**
- * Calibration paused callback
- * @param user_data User data pointer
- */
-typedef void (*dart_calibration_paused_callback)(
-    void* user_data
-);
-
-/**
- * Calibration finished callback (struct by value)
- * @param result eap_finished_calibration struct passed by value
- * @param user_data User data pointer
- */
-typedef void (*dart_calibration_finished_callback)(
-    eap_finished_calibration result,
-    void* user_data
-);
-
-/**
- * State change callback
- * @param state New connection state (eap_state enum value as int)
- * @param user_data User data pointer
- */
-typedef void (*dart_state_callback)(
-    int state,
-    void* user_data
-);
-
-/**
- * Video frame callback
- * @param data Raw video frame pixel data (valid only during callback)
- * @param length Length of pixel data in bytes
- * @param width Frame width in pixels
- * @param height Frame height in pixels
- * @param channels Number of channels (1=grayscale, 3=BGR, 4=BGRA)
- * @param user_data User data pointer
- */
-typedef void (*dart_video_callback)(
-    const uint8_t* data,
-    uint32_t length,
-    uint16_t width,
-    uint16_t height,
-    uint8_t channels,
-    void* user_data
-);
-
-/**
- * File status callback
- * @param status File transfer status (0=success, 1=progress, 2=failed)
- * @param progress Progress percentage 0-100 (valid when status==1)
- * @param error_message Error message (valid when status==2, NULL otherwise)
- * @param user_data User data pointer
- */
-typedef void (*dart_file_status_callback)(
-    uint16_t status,
-    uint16_t progress,
-    const char* error_message,
-    void* user_data
-);
-
-/**
- * Error callback
- * @param error_message Null-terminated error message
- * @param user_data User data pointer
- */
-typedef void (*dart_error_callback)(
-    const char* error_message,
-    void* user_data
-);
-
-/**
- * Logging callback — device log line streamed over EAP.
- * @param level         Log severity (eap_log_level)
- * @param message       Heap-allocated UTF-8 message string. Dart MUST free
- *                      this with flutter_eap_free() after reading.
- * @param timestamp_ms  Device timestamp (Unix ms) from the EAP message header
- * @param user_data     User data pointer
- */
-typedef void (*dart_logging_callback)(
-    uint8_t level,
-    const char* message,
-    int64_t timestamp_ms,
-    void* user_data
-);
-
-// =============================================================================
-// Callback Registration Structure
-// =============================================================================
-
-/**
- * Structure to hold all Dart callback function pointers
- * Passed to flutter_eap_create()
- */
-typedef struct {
-    dart_gaze_callback on_gaze;
-    dart_positioning_callback on_positioning;
-    dart_version_callback on_version;
-    dart_control_callback on_control;
-    dart_calibration_point_callback on_calibration_point;
-    dart_calibration_progress_callback on_calibration_progress;
-    dart_calibration_paused_callback on_calibration_paused;
-    dart_calibration_finished_callback on_calibration_finished;
-    dart_video_callback on_video;
-    dart_file_status_callback on_file_status;
-    dart_logging_callback on_logging;
-    dart_state_callback on_state_change;
-    dart_error_callback on_error;
-    void* user_data;  // Passed back to all callbacks
-} flutter_eap_callbacks;
-
-/** Maximum number of concurrent callback subscribers (Flutter engines). */
-#define FLUTTER_EAP_MAX_SUBSCRIBERS 8
 
 // =============================================================================
 // Public API Functions
@@ -254,31 +82,11 @@ eap_client* flutter_eap_get_instance(void);
  */
 int flutter_eap_set_callbacks(eap_client* client, const flutter_eap_callbacks* callbacks);
 
-/**
- * Register an ADDITIONAL callback subscriber (multi-engine fan-out).
- * Each subscriber receives every callback for which it registered a non-NULL
- * function pointer. Heap payloads (video frames, log / file-status strings)
- * are allocated per subscriber; each Dart side frees its own copy with
- * flutter_eap_free(). Calibration-result arrays are deep-copied per subscriber
- * slot and stay bridge-owned (freed on next dispatch or removal), matching the
- * existing Dart no-free semantics.
- * Installs the C adapters on the core client if not yet installed.
- *
- * @return handle > 0 on success; -1 on invalid args; -2 when the table is full.
- */
-int64_t flutter_eap_add_callbacks(eap_client* client, const flutter_eap_callbacks* callbacks);
-
-/**
- * Remove one callback subscriber. Idempotent: unknown or stale handles return
- * -1 and do nothing. After return (synchronized with dispatch via the callback
- * mutex) the subscriber's function pointers can no longer be invoked - the safe
- * point for the owner to close its NativeCallables.
- * Does NOT unregister the C adapters from the core client, even when the table
- * empties - other engines may subscribe later.
- *
- * @return 0 on success, -1 if the handle was not found.
- */
-int flutter_eap_remove_callbacks(eap_client* client, int64_t handle);
+// flutter_eap_add_callbacks / flutter_eap_add_callbacks_engine /
+// flutter_eap_remove_callbacks (multi-engine fan-out) are declared in
+// flutter_eap_fanout.h and defined in flutter_eap_bridge.c. On Android the
+// stale-subscriber reaping stays with the Kotlin plugin (reportSubscriberHandle
+// -> onDetachedFromEngine), so Dart uses the plain add.
 
 /**
  * Mark the transport as owned by the Kotlin host (accessibility service).
@@ -296,6 +104,22 @@ void flutter_eap_set_host_owned(bool owned);
  * @param callback Kotlin callback object with read() and write() methods
  */
 void flutter_eap_set_kotlin_transport(eap_client* client, void* env, void* callback);
+
+/**
+ * Set the Kotlin USB ownership listener (called from JNI) and register the
+ * bridge's trampoline with the Skyle Link supervisor
+ * (skyle_link_set_usb_ownership_callback). The listener object must implement
+ *   fun onUsbOwnershipChanged(wanted: Boolean)
+ * wanted=true: the supervisor acquired ownership - open/claim the USB device;
+ * wanted=false: it released (handover/preempt/disable) - close/release.
+ * Fires on supervisor threads: the Kotlin side must hop to a handler for the
+ * USB work and never block. NULL clears both the listener and the supervisor
+ * callback slot.
+ *
+ * @param env JNI environment
+ * @param listener Kotlin listener object (NULL clears)
+ */
+void flutter_eap_set_kotlin_usb_ownership_listener(void* env, void* listener);
 
 /**
  * Clear all Dart callbacks (MUST call before closing NativeCallable objects)

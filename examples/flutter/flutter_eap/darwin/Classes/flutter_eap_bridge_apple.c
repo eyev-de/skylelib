@@ -12,23 +12,33 @@
  *   - Swift calls flutter_eap_configure_iokit_transport() for convenience
  *   - IOKit transport handles read/write/device_check entirely in C
  *
- * Dart Layer (both platforms):
- *   - Dart calls flutter_eap_set_callbacks() to register message handlers
+ * Dart Layer:
+ *   - macOS: each Flutter engine registers a subscriber via the shared
+ *     multi-engine fan-out (flutter_eap_add_callbacks_engine, see
+ *     native/fanout/flutter_eap_fanout.c) - main window + sub-windows all
+ *     receive every callback independently
+ *   - iOS: single-slot flutter_eap_set_callbacks() (one engine, push mode)
  *   - C library parses protocol and invokes adapter callbacks
  *   - Adapters pass C structs by value to Dart
  */
 
 #include "flutter_eap_bridge_apple.h"
-#include <eap_client.h>
-#include <eap/eap_message_types.h>
+#include <skylelib/eap_client.h>
+#include <skylelib/eap/eap_message_types.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <pthread.h>
 #include <TargetConditionals.h>
 
+// skyle_link.h is platform-neutral (flutter_eap_connect consults the
+// supervisor on both platforms); the IOKit transport and the fan-out hook
+// wiring are macOS-only.
+#include <skylelib/skyle_link.h>
+
 #if TARGET_OS_OSX
-#include <eap_transport_iokit.h>
+#include <skylelib/eap_transport_iokit.h>
+#include "../../native/link/flutter_eap_link_glue.h"  // fan-out hook registration
 #endif
 
 #define LOG_TAG "FlutterEapBridge"
@@ -40,20 +50,35 @@
 // =============================================================================
 
 typedef struct {
+#if TARGET_OS_IOS
+    // iOS single-slot callback machinery. On macOS the subscriber table, the
+    // adapters, and the calibration deep copies live in the shared fan-out
+    // module (native/fanout/flutter_eap_fanout.c).
     flutter_eap_callbacks dart_callbacks;
     pthread_mutex_t callback_mutex;  // Protects dart_callbacks against dispatch thread race
-    eap_client* client;
     char last_error[256];
     // Deep copies of calibration result arrays kept alive for async Dart callback
     eap_quality_point* calib_left_copy;
     eap_quality_point* calib_right_copy;
+#endif
+    eap_client* client;
 #if TARGET_OS_OSX
     eap_transport_iokit* iokit_transport;
+    uint16_t iokit_vendor_id;   // Remembered so the USB ownership callback can recreate
+    uint16_t iokit_product_id;  // the transport on reacquire (guarded by g_iokit_mutex)
 #endif
 } bridge_context;
 
 static eap_client* g_client = NULL;
 static bridge_context* g_context = NULL;
+
+#if TARGET_OS_OSX
+// Guards the IOKit transport lifecycle: flutter_eap_configure_iokit_transport
+// runs on the Dart/platform thread while the Skyle Link USB ownership callback
+// fires on supervisor threads.
+static pthread_mutex_t g_iokit_mutex = PTHREAD_MUTEX_INITIALIZER;
+static bool g_usb_ownership_registered = false;
+#endif
 
 static bridge_context* get_context_for_client(eap_client* client) {
     if (!client) {
@@ -87,8 +112,10 @@ static void unregister_client_context(eap_client* client) {
     }
 }
 
+#if TARGET_OS_IOS
 // =============================================================================
-// C-to-Dart callback adapters (identical to Android bridge)
+// C-to-Dart callback adapters (iOS single-slot; the fan-out platforms use the
+// shared module's adapters instead)
 // =============================================================================
 
 static void on_gaze_adapter(eap_client* client, const eap_gaze_response* data, void* user_data) {
@@ -358,6 +385,7 @@ static void on_logging_adapter(eap_client* client,
     }
     pthread_mutex_unlock(&ctx->callback_mutex);
 }
+#endif // TARGET_OS_IOS
 
 // =============================================================================
 // Public API Implementation
@@ -372,12 +400,18 @@ static bridge_context* ensure_context(eap_client* client) {
         LOGE("ensure_context: Failed to allocate context");
         return NULL;
     }
+#if TARGET_OS_IOS
     pthread_mutex_init(&ctx->callback_mutex, NULL);
-    ctx->client = client;
     ctx->calib_left_copy = NULL;
     ctx->calib_right_copy = NULL;
+#endif
+    ctx->client = client;
 #if TARGET_OS_OSX
     ctx->iokit_transport = NULL;
+    // Route the Skyle Link glue's suspension updates through the shared
+    // fan-out (idempotent re-assignment; mirrors the Android bridge's
+    // get_or_create_context).
+    flutter_eap_link_glue_set_fanout_hook(flutter_eap_fanout_dispatch_suspend_state);
 #endif
     register_client_context(client, ctx);
     return ctx;
@@ -414,6 +448,17 @@ EAP_EXPORT int flutter_eap_set_callbacks(eap_client* client, const flutter_eap_c
     bridge_context* ctx = ensure_context(client);
     if (!ctx) return -1;
 
+#if TARGET_OS_OSX
+    // Legacy replace-all-with-one semantics (module: clear the whole
+    // subscriber table, register the caller as the only subscriber).
+    int result = flutter_eap_fanout_set_single(client, callbacks);
+    if (result != 0) {
+        return result;
+    }
+
+    LOGD("flutter_eap_set_callbacks: Callbacks registered successfully for client %p (legacy single-subscriber mode)", client);
+    return 0;
+#else
     // Mutex-protected for hot restart safety
     pthread_mutex_lock(&ctx->callback_mutex);
     memcpy(&ctx->dart_callbacks, callbacks, sizeof(flutter_eap_callbacks));
@@ -444,7 +489,62 @@ EAP_EXPORT int flutter_eap_set_callbacks(eap_client* client, const flutter_eap_c
 
     LOGD("flutter_eap_set_callbacks: Callbacks registered successfully for client %p", client);
     return 0;
+#endif
 }
+
+#if TARGET_OS_OSX
+// =============================================================================
+// Multi-engine subscriber fan-out (macOS; declared in flutter_eap_fanout.h)
+// =============================================================================
+
+EAP_EXPORT int64_t flutter_eap_add_callbacks(eap_client* client, const flutter_eap_callbacks* callbacks) {
+    return flutter_eap_add_callbacks_engine(client, callbacks, 0);
+}
+
+EAP_EXPORT int64_t flutter_eap_add_callbacks_engine(eap_client* client, const flutter_eap_callbacks* callbacks, int64_t engine_token) {
+    if (!client || !callbacks) {
+        LOGE("flutter_eap_add_callbacks: NULL parameters");
+        return -1;
+    }
+
+    bridge_context* ctx = ensure_context(client);
+    if (!ctx) return -1;
+
+    // Table + adapter installation live in the shared fan-out module. A
+    // re-add with the same non-zero engine token (Dart passes the native
+    // engine id) reaps the previous subscriber first - the desktop
+    // hot-restart path, where there is no Kotlin-style host bookkeeping.
+    int64_t handle = flutter_eap_fanout_add(client, callbacks, engine_token);
+    if (handle == -2) {
+        LOGE("flutter_eap_add_callbacks: Subscriber table full (%d slots)", FLUTTER_EAP_MAX_SUBSCRIBERS);
+        return -2;
+    }
+    if (handle <= 0) {
+        return -1;
+    }
+
+    LOGD("flutter_eap_add_callbacks: Registered subscriber handle=%lld for client %p (engine_token=%lld)",
+         (long long)handle, (void*)client, (long long)engine_token);
+    return handle;
+}
+
+EAP_EXPORT int flutter_eap_remove_callbacks(eap_client* client, int64_t handle) {
+    if (!client || handle <= 0) {
+        return -1;
+    }
+
+    bridge_context* ctx = get_context_for_client(client);
+    if (!ctx) {
+        return -1;
+    }
+
+    // The module deliberately keeps the core adapters registered even when
+    // the table empties - other engines may subscribe at any time.
+    int result = flutter_eap_fanout_remove(handle);
+    LOGD("flutter_eap_remove_callbacks: handle=%lld -> %s", (long long)handle, result == 0 ? "removed" : "not found");
+    return result;
+}
+#endif // TARGET_OS_OSX
 
 EAP_EXPORT void flutter_eap_set_apple_transport(
     eap_client* client,
@@ -481,31 +581,23 @@ EAP_EXPORT void flutter_eap_set_apple_transport(
 }
 
 #if TARGET_OS_OSX
-EAP_EXPORT int flutter_eap_configure_iokit_transport(eap_client* client, uint16_t vendor_id, uint16_t product_id) {
-    if (!client) {
-        LOGE("flutter_eap_configure_iokit_transport: NULL client");
-        return -1;
-    }
-
-    bridge_context* ctx = ensure_context(client);
-    if (!ctx) return -1;
-
-    // Destroy existing IOKit transport if any
-    if (ctx->iokit_transport) {
-        eap_transport_iokit_destroy(ctx->iokit_transport);
-        ctx->iokit_transport = NULL;
-    }
-
-    eap_transport_iokit_config iokit_config = {
-        .vendor_id = vendor_id,
-        .product_id = product_id,
-        .timeout_ms = 1000,
-        .verbose = false
-    };
-
-    ctx->iokit_transport = eap_transport_iokit_create(&iokit_config);
+/**
+ * Create the IOKit transport if absent (from the VID/PID stored in the
+ * context) and register it on the client. Shared by the Dart-facing configure
+ * call and the supervisor's USB ownership callback. Caller holds g_iokit_mutex.
+ */
+static int iokit_register_transport_locked(bridge_context* ctx, eap_client* client) {
     if (!ctx->iokit_transport) {
-        LOGD("flutter_eap_configure_iokit_transport: Device not present yet, transport will connect when available");
+        eap_transport_iokit_config iokit_config = {
+            .vendor_id = ctx->iokit_vendor_id,
+            .product_id = ctx->iokit_product_id,
+            .timeout_ms = 1000,
+            .verbose = false
+        };
+        ctx->iokit_transport = eap_transport_iokit_create(&iokit_config);
+        if (!ctx->iokit_transport) {
+            LOGD("iokit_register_transport: Device not present yet, transport will connect when available");
+        }
     }
 
     // Set transport using IOKit functions
@@ -521,8 +613,106 @@ EAP_EXPORT int flutter_eap_configure_iokit_transport(eap_client* client, uint16_
 
     eap_result result = eap_client_set_transport(client, &transport_config);
     if (result != EAP_OK) {
-        LOGE("flutter_eap_configure_iokit_transport: eap_client_set_transport failed (%d)", result);
+        LOGE("iokit_register_transport: eap_client_set_transport failed (%d)", result);
         return (int)result;
+    }
+    return 0;
+}
+
+/**
+ * Skyle Link supervisor USB ownership hook (macOS only). With this callback
+ * registered the PLATFORM owns the transport lifecycle: the supervisor never
+ * snapshots/restores a transport config itself. Contract (skyle_link.h /
+ * skyle_link_supervisor.c):
+ *  - cb(true) fires when ownership is acquired, BEFORE anything else touches
+ *    the transport: (re)create the IOKit transport and register it (which
+ *    also restarts the background threads).
+ *  - cb(false) fires AFTER the supervisor stopped the client's USB threads
+ *    (hub stop + disconnect): destroy the transport, closing the IOKit
+ *    device/interface claim so the new owner can claim the device.
+ * Fires on supervisor threads - non-blocking apart from bounded synchronous
+ * IOKit calls (eap_transport_iokit_create/destroy are runloop-free and safe
+ * off the main thread). Idempotent: cb(true) reuses a still-live transport
+ * (initial acquire right after configure), cb(false) with no transport is a
+ * no-op. Resolves client/context via the globals: flutter_eap_destroy joins
+ * the supervisor (inside eap_client_destroy) before freeing the context, so a
+ * late fire sees NULL and does nothing.
+ */
+static void iokit_usb_ownership_callback(bool usb_wanted, void* user_data) {
+    (void)user_data;
+    eap_client* client = g_client;
+    bridge_context* ctx = g_context;
+    if (!client || !ctx) {
+        LOGD("iokit_usb_ownership_callback: No client/context (usb_wanted=%d), ignoring", usb_wanted ? 1 : 0);
+        return;
+    }
+    pthread_mutex_lock(&g_iokit_mutex);
+    if (usb_wanted) {
+        int result = iokit_register_transport_locked(ctx, client);
+        LOGD("iokit_usb_ownership_callback: USB acquired, transport %s (VID=0x%04X, PID=0x%04X, result=%d)",
+             ctx->iokit_transport ? "registered" : "pending device", ctx->iokit_vendor_id, ctx->iokit_product_id, result);
+    } else {
+        if (ctx->iokit_transport) {
+            eap_transport_iokit_destroy(ctx->iokit_transport);
+            ctx->iokit_transport = NULL;
+            LOGD("iokit_usb_ownership_callback: USB released, IOKit device claim closed");
+        } else {
+            LOGD("iokit_usb_ownership_callback: USB released, no transport to close");
+        }
+    }
+    pthread_mutex_unlock(&g_iokit_mutex);
+}
+
+EAP_EXPORT int flutter_eap_configure_iokit_transport(eap_client* client, uint16_t vendor_id, uint16_t product_id) {
+    if (!client) {
+        LOGE("flutter_eap_configure_iokit_transport: NULL client");
+        return -1;
+    }
+
+    bridge_context* ctx = ensure_context(client);
+    if (!ctx) return -1;
+
+    pthread_mutex_lock(&g_iokit_mutex);
+
+    // While the transport supervisor runs with the ownership callback
+    // registered, the PLATFORM CALLBACK owns the transport lifecycle
+    // (skyle_link.h): a Dart-driven reconfigure (legacy auto-reconnect paths
+    // call configure on every disconnect edge) must NOT destroy/recreate the
+    // IOKit device claim here - mid-handover that fights the new USB owner
+    // for the device and holds g_iokit_mutex against the supervisor's
+    // ownership callback. Refresh the IDs for the next cb(true) and return;
+    // the Skyle VID/PID never change at runtime in practice.
+    if (g_usb_ownership_registered && skyle_link_supervisor_is_enabled()) {
+        ctx->iokit_vendor_id = vendor_id;
+        ctx->iokit_product_id = product_id;
+        pthread_mutex_unlock(&g_iokit_mutex);
+        LOGD("flutter_eap_configure_iokit_transport: supervisor owns the transport lifecycle, skipping reconfigure");
+        return 0;
+    }
+
+    // Destroy existing IOKit transport if any (reconfigure replaces it)
+    if (ctx->iokit_transport) {
+        eap_transport_iokit_destroy(ctx->iokit_transport);
+        ctx->iokit_transport = NULL;
+    }
+    ctx->iokit_vendor_id = vendor_id;
+    ctx->iokit_product_id = product_id;
+
+    int result = iokit_register_transport_locked(ctx, client);
+
+    // First configure: hand the transport lifecycle to the platform layer for
+    // Skyle Link handovers (macOS only - iOS runs push mode without a
+    // supervisor and never reaches this function).
+    if (result == 0 && !g_usb_ownership_registered) {
+        skyle_link_set_usb_ownership_callback(iokit_usb_ownership_callback, NULL);
+        g_usb_ownership_registered = true;
+        LOGD("flutter_eap_configure_iokit_transport: USB ownership callback registered");
+    }
+
+    pthread_mutex_unlock(&g_iokit_mutex);
+
+    if (result != 0) {
+        return result;
     }
 
     LOGD("flutter_eap_configure_iokit_transport: IOKit transport configured (VID=0x%04X, PID=0x%04X)", vendor_id, product_id);
@@ -541,6 +731,13 @@ EAP_EXPORT void flutter_eap_clear_callbacks(eap_client* client) {
         return;
     }
 
+#if TARGET_OS_OSX
+    // Module: zero ALL subscriber slots under the mutex (atomic for any
+    // adapter currently dispatching), then unregister the C adapters from
+    // eap_client so eap_process_message does not even reach them. A later
+    // set/add call re-registers the adapters.
+    flutter_eap_fanout_clear(client);
+#else
     // Zero the Dart callback pointers under the mutex first so any adapter
     // currently dispatching observes the change atomically.
     pthread_mutex_lock(&ctx->callback_mutex);
@@ -555,6 +752,7 @@ EAP_EXPORT void flutter_eap_clear_callbacks(eap_client* client) {
     // re-register these adapters, so this is safe to do unconditionally.
     eap_callback_config empty_config = {0};
     eap_client_set_callbacks(client, &empty_config);
+#endif
 
     LOGD("flutter_eap_clear_callbacks: Callbacks cleared successfully");
 }
@@ -580,19 +778,32 @@ EAP_EXPORT void flutter_eap_destroy(eap_client* client) {
     // preventing a use-after-free into the freed bridge context.
     unregister_client_context(client);
 
-    // Destroy client (this stops background thread and waits for it)
+    // Destroy client (this stops background thread and waits for it; it also
+    // joins the Skyle Link supervisor first, so the USB ownership callback
+    // cannot fire past this point)
     eap_client_destroy(client);
 
+#if TARGET_OS_OSX
+    // Drop the ownership registration so a future create/configure cycle
+    // starts clean (the supervisor is already stopped and joined above).
+    pthread_mutex_lock(&g_iokit_mutex);
+    if (g_usb_ownership_registered) {
+        skyle_link_set_usb_ownership_callback(NULL, NULL);
+        g_usb_ownership_registered = false;
+    }
+    if (ctx && ctx->iokit_transport) {
+        eap_transport_iokit_destroy(ctx->iokit_transport);
+        ctx->iokit_transport = NULL;
+    }
+    pthread_mutex_unlock(&g_iokit_mutex);
+#endif
+
     if (ctx) {
+#if TARGET_OS_IOS
         free(ctx->calib_left_copy);
         free(ctx->calib_right_copy);
-#if TARGET_OS_OSX
-        if (ctx->iokit_transport) {
-            eap_transport_iokit_destroy(ctx->iokit_transport);
-            ctx->iokit_transport = NULL;
-        }
-#endif
         pthread_mutex_destroy(&ctx->callback_mutex);
+#endif
         free(ctx);
     }
 
@@ -605,7 +816,11 @@ EAP_EXPORT int flutter_eap_connect(eap_client* client) {
     eap_connection_state current_state = eap_client_get_state(client);
     LOGD("flutter_eap_connect: Current state: %d", (int)current_state);
 
-    if (current_state != EAP_STATE_DISCONNECTED) {
+    // While the transport supervisor runs, a Dart-initiated connect must never
+    // force-reset the link: it would kill a healthy local (socket) link or a
+    // supervisor-managed USB session with no closed notification. The
+    // eap_client_connect below is a supervisor kick in that case.
+    if (current_state != EAP_STATE_DISCONNECTED && !skyle_link_supervisor_is_enabled()) {
         LOGD("flutter_eap_connect: Client not in DISCONNECTED state (%d), resetting...", (int)current_state);
         eap_client_disconnect(client);
     }
@@ -724,7 +939,13 @@ EAP_EXPORT const char* flutter_eap_get_last_error(eap_client* client) {
     if (!client) return NULL;
     bridge_context* ctx = get_context_for_client(client);
     if (!ctx) return NULL;
+#if TARGET_OS_OSX
+    // The error buffer lives in the fan-out module (its on_error adapter
+    // records the message before dispatching to the subscribers).
+    return flutter_eap_fanout_last_error();
+#else
     return ctx->last_error[0] != '\0' ? ctx->last_error : NULL;
+#endif
 }
 
 // =============================================================================

@@ -18,19 +18,26 @@ with an FFI bridge to Dart.
   s.author           = { 'eyeV GmbH' => 'kw@eyev.de' }
   s.source           = { :path => '.' }
 
-  # Classes/ contains:
-  # - FlutterEapPlugin.swift      (plugin registration + transport config)
-  # - EapTransportManager.swift   (EASession transport adapter, push mode)
-  # - OutputStreamManager.swift / BoundedQueue.swift
-  # - flutter_eap_ios.h           (umbrella header for Swift-C interop)
-  # - skylelib_unity.c            (compiles only the shared Apple FFI bridge;
-  #                                skylelib itself is linked prebuilt, see below)
-  s.source_files = 'Classes/**/*.{swift,h,c}'
+  # Sources live in the Swift Package Manager layout (dual support - the
+  # package at flutter_eap/Package.swift compiles the SAME files):
+  # - flutter_eap/Sources/flutter_eap/FlutterEapPlugin.swift
+  #     (plugin registration + EASession push transport)
+  # - flutter_eap/Sources/flutter_eap/OutputStreamManager.swift
+  #   flutter_eap/Sources/flutter_eap/BoundedQueue.swift
+  #     (backpressured async writer + its queue)
+  # - flutter_eap/Sources/flutter_eap_bridge/include/flutter_eap_ios.h
+  #     (umbrella header for Swift-C interop)
+  # - flutter_eap/Sources/flutter_eap_bridge/skylelib_unity.c
+  #     (compiles only the shared Apple FFI bridge and the Skyle Link glue;
+  #      skylelib itself is linked prebuilt, see below)
+  s.source_files = 'flutter_eap/Sources/**/*.{swift,h,c}'
 
-  s.public_header_files = 'Classes/flutter_eap_ios.h'
+  s.public_header_files = 'flutter_eap/Sources/flutter_eap_bridge/include/flutter_eap_ios.h'
 
   s.dependency 'Flutter'
-  s.platform = :ios, '14.0'
+  # Floor of the prebuilt iOS slices (build_sdk.sh: IOS_DEPLOYMENT_TARGET=13.0),
+  # matching flutter_eap/Package.swift and Flutter's own iOS minimum.
+  s.platform = :ios, '13.0'
   s.frameworks = 'ExternalAccessory'
 
   # --- Prebuilt skylelib (release-pipeline artifact) ---------------------------
@@ -39,15 +46,17 @@ with an FFI bridge to Dart.
   # darwin/skylelib_prebuilt.rb): SKYLELIB_DIST env → the skylelib source tree's
   # dist/ → download the GitHub release matching the plugin version into
   # <plugin>/.skylelib/ (pub git dependency path). The xcframework is then
-  # copied into ios/.skylelib/ and vendored, so CocoaPods links libskylelib.a
-  # into the target that performs the final link — required for apps using
-  # `use_frameworks! :linkage => :static`, where the pod itself is archived
-  # with libtool and pod-level OTHER_LDFLAGS never reach a linker.
+  # copied into ios/flutter_eap/.skylelib/ - INSIDE the Swift package, so the
+  # same copy serves as Package.swift's local binaryTarget - and vendored, so
+  # CocoaPods links libskylelib.a into the target that performs the final
+  # link — required for apps using `use_frameworks! :linkage => :static`, where
+  # the pod itself is archived with libtool and pod-level OTHER_LDFLAGS never
+  # reach a linker.
   # NOTE: resolve the Flutter plugin symlink to the real location.
   here = File.realpath(__dir__)
-  s.vendored_frameworks = skylelib_vendor_xcframework(here)
-  dev = '${PODS_TARGET_SRCROOT}/.skylelib/skylelib.xcframework/ios-arm64'
-  sim = '${PODS_TARGET_SRCROOT}/.skylelib/skylelib.xcframework/ios-arm64_x86_64-simulator'
+  s.vendored_frameworks = skylelib_vendor_xcframework(here, File.join('flutter_eap', '.skylelib'))
+  dev = '${PODS_TARGET_SRCROOT}/flutter_eap/.skylelib/skylelib.xcframework/ios-arm64'
+  sim = '${PODS_TARGET_SRCROOT}/flutter_eap/.skylelib/skylelib.xcframework/ios-arm64_x86_64-simulator'
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',

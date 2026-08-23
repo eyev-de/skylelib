@@ -1,6 +1,13 @@
 import Cocoa
 import FlutterMacOS
 
+// Swift Package Manager builds the C FFI bridge as its own module; under
+// CocoaPods the same declarations arrive through the pod umbrella header
+// (flutter_eap_macos.h), where this module does not exist.
+#if canImport(flutter_eap_bridge)
+import flutter_eap_bridge
+#endif
+
 /// Flutter EAP Plugin for macOS
 ///
 /// Architecture:
@@ -20,6 +27,10 @@ public class FlutterEapPlugin: NSObject, FlutterPlugin {
     // Global state - shared across engine instances
     private static var isPrimaryInitialized = false
     private static var isTransportConfigured = false
+    // Live engine count: the native callback table holds one subscriber per
+    // engine (multi-engine fan-out), so clear-all is only safe once the LAST
+    // engine detaches.
+    private static var engineCount = 0
     private var isPrimary = false
 
     private let channel: FlutterMethodChannel
@@ -36,6 +47,7 @@ public class FlutterEapPlugin: NSObject, FlutterPlugin {
         let channel = FlutterMethodChannel(name: "flutter_eap/usb", binaryMessenger: registrar.messenger)
         let instance = FlutterEapPlugin(channel: channel)
         registrar.addMethodCallDelegate(instance, channel: channel)
+        engineCount += 1
 
         if !isPrimaryInitialized {
             isPrimaryInitialized = true
@@ -63,12 +75,18 @@ public class FlutterEapPlugin: NSObject, FlutterPlugin {
     // MARK: - Engine Lifecycle
 
     /// Called by the Flutter engine before tearing down the Dart VM.
-    /// Nulling out the Dart callback pointers here ensures the IOKit background
-    /// thread cannot call a closed NativeCallable and trigger abort().
+    ///
+    /// Each engine holds its own subscriber in the native fan-out table and
+    /// removes it in Dart (EapClientFfi.destroy). Clearing ALL callbacks here
+    /// would wipe the OTHER engines' subscriptions, so the safety net (for an
+    /// engine that dies without running its Dart destroy - the IOKit thread
+    /// must not call a closed NativeCallable and abort) only fires when the
+    /// LAST engine detaches.
     public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
-        if let clientPtr = flutter_eap_get_instance() {
+        FlutterEapPlugin.engineCount -= 1
+        if FlutterEapPlugin.engineCount <= 0, let clientPtr = flutter_eap_get_instance() {
             flutter_eap_clear_callbacks(clientPtr)
-            print("[FlutterEapPlugin macOS] detachFromEngine: callbacks cleared")
+            print("[FlutterEapPlugin macOS] detachFromEngine: last engine detached, callbacks cleared")
         }
         if isPrimary {
             NotificationCenter.default.removeObserver(self)

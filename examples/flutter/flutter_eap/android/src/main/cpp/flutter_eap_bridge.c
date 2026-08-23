@@ -20,8 +20,10 @@
  */
 
 #include "flutter_eap_bridge.h"
+#include "flutter_eap_link_glue.h"
 #include <eap_client.h>
 #include <skylelib/eap/eap_message_types.h>
+#include <skylelib/skyle_link.h>
 #include <stdlib.h>
 #include <string.h>
 #include <jni.h>
@@ -35,30 +37,17 @@
 // =============================================================================
 // Internal structures and global state
 // =============================================================================
+//
+// The Dart callback subscriber table (one slot per Flutter engine: main app +
+// overlays), the C-to-Dart adapters, and the payload-copy rules live in the
+// shared fan-out module (native/fanout/flutter_eap_fanout.c) - this bridge
+// keeps the JNI/Kotlin-transport/host-owned/context specifics and delegates
+// the callback machinery.
 
 /**
- * One registered Dart callback subscriber (one per Flutter engine).
- * handle == 0 marks a free slot. Calibration result arrays are deep-copied
- * per subscriber because NativeCallable.listener delivers asynchronously;
- * each slot's copies stay alive until the next dispatch or removal.
+ * Bridge context - stores the Kotlin transport and client state
  */
 typedef struct {
-    int64_t handle;
-    flutter_eap_callbacks cbs;
-    eap_quality_point* calib_left_copy;
-    eap_quality_point* calib_right_copy;
-} eap_subscriber;
-
-/**
- * Bridge context - stores Dart callback subscribers, Kotlin transport, and client state
- */
-typedef struct {
-    // Dart callback subscribers, one per Flutter engine (main app + overlays).
-    // Protected by callback_mutex against the dispatch thread.
-    eap_subscriber subscribers[FLUTTER_EAP_MAX_SUBSCRIBERS];
-    int64_t next_subscriber_handle;  // Monotonic, starts at 1; 0 is "free slot"
-    pthread_mutex_t callback_mutex;
-
     // Kotlin USB transport callbacks (JNI)
     JavaVM* jvm;              // Java VM for getting JNI env
     jobject kotlin_callback;  // Global reference to Kotlin callback object
@@ -71,9 +60,6 @@ typedef struct {
     jsize      read_buffer_size;  // Size of the pre-allocated read buffer
     jbyteArray write_buffer;      // Reusable write buffer (8192 bytes)
     jsize      write_buffer_size; // Size of the pre-allocated write buffer
-
-    // Error handling
-    char last_error[256];
 
     // Client reference
     eap_client* client;
@@ -91,13 +77,6 @@ static bool g_host_owned = false;
 void flutter_eap_set_host_owned(bool owned) {
     g_host_owned = owned;
     LOGD("flutter_eap_set_host_owned: transport host-owned = %d", owned ? 1 : 0);
-}
-
-/** Free one subscriber slot's calibration copies and mark it free. Caller holds callback_mutex. */
-static void free_subscriber_slot(eap_subscriber* sub) {
-    free(sub->calib_left_copy);
-    free(sub->calib_right_copy);
-    memset(sub, 0, sizeof(eap_subscriber));
 }
 
 static bridge_context* get_context_for_client(eap_client* client) {
@@ -195,6 +174,129 @@ static JNIEnv* get_jni_env(JavaVM* jvm) {
 
     LOGE("get_jni_env: GetEnv failed with result=%d", result);
     return NULL;
+}
+
+// =============================================================================
+// Skyle Link: Kotlin USB ownership forwarding
+// =============================================================================
+// (Suspension changes fan out to every engine's subscriber slot via the
+// shared module: get_or_create_context registers
+// flutter_eap_fanout_dispatch_suspend_state as the link glue's process hook.)
+
+// Kotlin USB ownership listener (EapUsbHost -> UsbEndpointManager). Same
+// GlobalRef + mutex pattern as the Kotlin transport callback; the supervisor
+// fires the trampoline on its own threads and the Kotlin side hops to a
+// handler. Own JavaVM reference because the listener can be registered
+// before any transport context exists.
+static pthread_mutex_t g_usb_ownership_mutex = PTHREAD_MUTEX_INITIALIZER;
+static JavaVM* g_usb_ownership_jvm = NULL;
+static jobject g_usb_ownership_listener = NULL;
+static jmethodID g_usb_ownership_on_changed = NULL;
+
+/**
+ * Trampoline registered with skyle_link_set_usb_ownership_callback: forwards
+ * the supervisor's USB ownership grants/releases to the Kotlin listener.
+ *
+ * Ownership contract (skyle_link.h): the supervisor stops the client's
+ * background threads before cb(false), and the platform must bring its
+ * transport back up in cb(true). The darwin/windows bridges re-create their
+ * transport there (which restarts the threads); on Android the Kotlin
+ * listener only re-opens the USB device, so the bridge restarts the threads
+ * itself by re-registering the (unchanged) Kotlin transport. Without this the
+ * device is opened but never read - the firmware's 2.5 s heartbeat timeout
+ * then soft-resets it, which re-enumerates USB in an endless detach loop.
+ */
+static void bridge_forward_usb_ownership(bool usb_wanted, void* user_data) {
+    (void)user_data;
+    pthread_mutex_lock(&g_usb_ownership_mutex);
+    if (!g_usb_ownership_listener || !g_usb_ownership_jvm || !g_usb_ownership_on_changed) {
+        pthread_mutex_unlock(&g_usb_ownership_mutex);
+        return;
+    }
+
+    JNIEnv* env = get_jni_env(g_usb_ownership_jvm);
+    if (!env) {
+        LOGE("bridge_forward_usb_ownership: Failed to get JNI environment");
+        pthread_mutex_unlock(&g_usb_ownership_mutex);
+        return;
+    }
+
+    (*env)->CallVoidMethod(env, g_usb_ownership_listener, g_usb_ownership_on_changed,
+                           usb_wanted ? JNI_TRUE : JNI_FALSE);
+    if ((*env)->ExceptionCheck(env)) {
+        LOGE("bridge_forward_usb_ownership: Exception in Kotlin listener");
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+    }
+    pthread_mutex_unlock(&g_usb_ownership_mutex);
+
+    if (usb_wanted) {
+        eap_client* client = eap_client_get_instance();
+        if (client && !eap_client_is_background_running(client)) {
+            LOGD("bridge_forward_usb_ownership: restarting transport threads after ownership grant");
+            if (!flutter_eap_create_with_transport()) {
+                LOGE("bridge_forward_usb_ownership: transport thread restart failed");
+            }
+        }
+    }
+}
+
+void flutter_eap_set_kotlin_usb_ownership_listener(void* jni_env, void* listener_obj) {
+    JNIEnv* env = (JNIEnv*)jni_env;
+    if (!env) {
+        LOGE("flutter_eap_set_kotlin_usb_ownership_listener: NULL env");
+        return;
+    }
+
+    pthread_mutex_lock(&g_usb_ownership_mutex);
+
+    if (g_usb_ownership_listener) {
+        (*env)->DeleteGlobalRef(env, g_usb_ownership_listener);
+        g_usb_ownership_listener = NULL;
+        g_usb_ownership_on_changed = NULL;
+    }
+
+    if (!listener_obj) {
+        pthread_mutex_unlock(&g_usb_ownership_mutex);
+        // Clear the supervisor slot outside our mutex: an in-flight trampoline
+        // holds it while dispatching and bails on the NULLed listener.
+        skyle_link_set_usb_ownership_callback(NULL, NULL);
+        LOGD("flutter_eap_set_kotlin_usb_ownership_listener: listener cleared");
+        return;
+    }
+
+    if ((*env)->GetJavaVM(env, &g_usb_ownership_jvm) != JNI_OK) {
+        LOGE("flutter_eap_set_kotlin_usb_ownership_listener: Failed to get JavaVM");
+        pthread_mutex_unlock(&g_usb_ownership_mutex);
+        return;
+    }
+
+    jobject listener = (jobject)listener_obj;
+    g_usb_ownership_listener = (*env)->NewGlobalRef(env, listener);
+    if (!g_usb_ownership_listener) {
+        LOGE("flutter_eap_set_kotlin_usb_ownership_listener: Failed to create global reference");
+        pthread_mutex_unlock(&g_usb_ownership_mutex);
+        return;
+    }
+
+    jclass listenerClass = (*env)->GetObjectClass(env, g_usb_ownership_listener);
+    // fun onUsbOwnershipChanged(wanted: Boolean)
+    g_usb_ownership_on_changed = (*env)->GetMethodID(env, listenerClass, "onUsbOwnershipChanged", "(Z)V");
+    (*env)->DeleteLocalRef(env, listenerClass);
+    if (!g_usb_ownership_on_changed) {
+        LOGE("flutter_eap_set_kotlin_usb_ownership_listener: Failed to find onUsbOwnershipChanged method");
+        (*env)->DeleteGlobalRef(env, g_usb_ownership_listener);
+        g_usb_ownership_listener = NULL;
+        pthread_mutex_unlock(&g_usb_ownership_mutex);
+        return;
+    }
+
+    pthread_mutex_unlock(&g_usb_ownership_mutex);
+
+    // Register (or re-register) the trampoline with the supervisor AFTER the
+    // listener is in place so no grant is dispatched into a half-set slot.
+    skyle_link_set_usb_ownership_callback(bridge_forward_usb_ownership, NULL);
+    LOGD("flutter_eap_set_kotlin_usb_ownership_listener: USB ownership listener registered");
 }
 
 // =============================================================================
@@ -341,419 +443,6 @@ static int transport_read(uint8_t* buffer, uint16_t buffer_size, uint32_t timeou
     return (int)bytesRead;
 }
 
-// =============================================================================
-// C-to-Dart callback adapters
-// =============================================================================
-//
-// NOTE: These adapters are ONLY used by Dart, NOT by Kotlin!
-//
-// Architecture:
-// - Kotlin layer: ONLY uses transport functions via JNI
-//   → Kotlin never touches callbacks at all
-// - Dart layer: Sets callbacks via flutter_eap_set_callbacks()
-//   → Dart receives complete C structs via FFI
-// - C library: Invokes callbacks with C structs
-// - These adapters: Pass C struct pointers directly to Dart
-//   → Only registered when Dart calls flutter_eap_set_callbacks()
-//   → Called by C library background thread when messages are parsed
-//
-// Why minimal: Dart FFI can access C structs directly - no conversion needed
-//
-
-/**
- * Gaze callback adapter - passes eap_gaze_response struct directly to Dart
- */
-static void on_gaze_adapter(eap_client* client, const eap_gaze_response* data, void* user_data) {
-    (void)client;  // Unused
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx || !data) return;
-
-    // Mutex protects against subscriber add/remove racing the dispatch thread
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle != 0 && sub->cbs.on_gaze) {
-            sub->cbs.on_gaze(*data, sub->cbs.user_data);
-        }
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
-
-/**
- * Positioning callback adapter - passes eap_positioning_response struct directly to Dart
- */
-static void on_positioning_adapter(eap_client* client, const eap_positioning_response* data, void* user_data) {
-    (void)client;  // Unused
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx || !data) return;
-
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle != 0 && sub->cbs.on_positioning) {
-            sub->cbs.on_positioning(*data, sub->cbs.user_data);
-        }
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
-
-/**
- * Version callback adapter - passes eap_version_response struct directly to Dart
- */
-static void on_version_adapter(eap_client* client, const eap_version_response* version, void* user_data) {
-    (void)client;  // Unused
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx || !version) return;
-
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle != 0 && sub->cbs.on_version) {
-            sub->cbs.on_version(*version, sub->cbs.user_data);
-        }
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
-
-/**
- * Control callback adapter - passes eap_control_message struct directly to Dart
- */
-static void on_control_adapter(eap_client* client, const eap_control_message* data, void* user_data) {
-    (void)client;  // Unused
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx || !data) return;
-
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle != 0 && sub->cbs.on_control) {
-            sub->cbs.on_control(*data, sub->cbs.user_data);
-        }
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
-
-/**
- * Calibration point callback adapter - passes eap_next_calibration_point struct directly to Dart
- */
-static void on_calibration_point_adapter(eap_client* client, const eap_next_calibration_point* point, void* user_data) {
-    (void)client;  // Unused
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx || !point) return;
-
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle != 0 && sub->cbs.on_calibration_point) {
-            sub->cbs.on_calibration_point(*point, sub->cbs.user_data);
-        }
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
-
-/**
- * Calibration progress callback adapter - passes eap_collecting_calibration_points struct directly to Dart
- */
-static void on_calibration_progress_adapter(eap_client* client, const eap_collecting_calibration_points* progress, void* user_data) {
-    (void)client;  // Unused
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx || !progress) return;
-
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle != 0 && sub->cbs.on_calibration_progress) {
-            sub->cbs.on_calibration_progress(*progress, sub->cbs.user_data);
-        }
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
-
-/**
- * Calibration paused callback adapter
- */
-static void on_calibration_paused_adapter(eap_client* client, void* user_data) {
-    (void)client;  // Unused
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx) return;
-
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle != 0 && sub->cbs.on_calibration_paused) {
-            sub->cbs.on_calibration_paused(sub->cbs.user_data);
-        }
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
-
-/**
- * Calibration finished callback adapter - passes eap_finished_calibration struct directly to Dart
- */
-static void on_calibration_finished_adapter(eap_client* client, const eap_finished_calibration* result, void* user_data) {
-    (void)client;  // Unused
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx || !result) return;
-
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle == 0 || !sub->cbs.on_calibration_finished) continue;
-
-        // Deep copy quality point arrays PER SUBSCRIBER - NativeCallable.listener
-        // is async, so the original arrays will be freed before Dart processes
-        // the callback. Each slot keeps its copies alive until the next dispatch
-        // or the subscriber's removal.
-        free(sub->calib_left_copy);
-        free(sub->calib_right_copy);
-        sub->calib_left_copy = NULL;
-        sub->calib_right_copy = NULL;
-
-        eap_finished_calibration copy = *result;
-
-        if (result->left_count > 0 && result->left) {
-            size_t left_size = result->left_count * sizeof(eap_quality_point);
-            sub->calib_left_copy = (eap_quality_point*)malloc(left_size);
-            if (sub->calib_left_copy) {
-                memcpy(sub->calib_left_copy, result->left, left_size);
-                copy.left = sub->calib_left_copy;
-            }
-        }
-
-        if (result->right_count > 0 && result->right) {
-            size_t right_size = result->right_count * sizeof(eap_quality_point);
-            sub->calib_right_copy = (eap_quality_point*)malloc(right_size);
-            if (sub->calib_right_copy) {
-                memcpy(sub->calib_right_copy, result->right, right_size);
-                copy.right = sub->calib_right_copy;
-            }
-        }
-
-        sub->cbs.on_calibration_finished(copy, sub->cbs.user_data);
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
-
-/**
- * State change callback adapter
- */
-static void on_state_change_adapter(eap_client* client, eap_connection_state old_state,
-                                    eap_connection_state new_state, void* user_data) {
-    (void)client;      // Unused
-    (void)old_state;   // Unused - Dart only needs new state
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx) return;
-
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle != 0 && sub->cbs.on_state_change) {
-            sub->cbs.on_state_change((int)new_state, sub->cbs.user_data);
-        }
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
-
-/**
- * Error callback adapter
- */
-static void on_error_adapter(eap_client* client, eap_result error, const char* message, void* user_data) {
-    (void)client;  // Unused
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx || !message) return;
-
-    // Log error for debugging
-    LOGE("on_error_adapter: Error code=%d, message='%s'", (int)error, message);
-
-    // Store error message
-    strncpy(ctx->last_error, message, sizeof(ctx->last_error) - 1);
-    ctx->last_error[sizeof(ctx->last_error) - 1] = '\0';
-
-    // Invoke Dart callbacks
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle != 0 && sub->cbs.on_error) {
-            sub->cbs.on_error(message, sub->cbs.user_data);
-        }
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
-
-/**
- * Video frame callback adapter
- * Called directly from I/O thread when a chunked transfer completes.
- * Data pointer is only valid during this callback.
- * Converts to RGBA in C (compiler auto-vectorises) so Dart receives
- * ready-to-display pixels with no per-pixel loop on the UI thread.
- */
-static void on_video_adapter(eap_client* client, const eap_video_response* video,
-                              void* user_data) {
-    (void)client;
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx || !video || !video->pixel_data) return;
-
-    pthread_mutex_lock(&ctx->callback_mutex);
-
-    // Count subscribers first: the RGBA conversion is only done when someone
-    // is listening, and the LAST matching subscriber takes ownership of the
-    // original buffer (earlier ones get copies, made BEFORE the original is
-    // handed to Dart - each Dart isolate frees its own buffer asynchronously
-    // via flutter_eap_free, so copying from an already-delivered buffer would
-    // race that free).
-    int matching = 0;
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        if (ctx->subscribers[i].handle != 0 && ctx->subscribers[i].cbs.on_video) matching++;
-    }
-    if (matching == 0) {
-        pthread_mutex_unlock(&ctx->callback_mutex);
-        return;
-    }
-
-    const uint32_t pixel_count = (uint32_t)video->width * (uint32_t)video->height;
-    const uint64_t rgba_size_64 = (uint64_t)pixel_count * 4;
-    if (pixel_count == 0 || rgba_size_64 > (64u * 1024u * 1024u)) {
-        pthread_mutex_unlock(&ctx->callback_mutex);
-        return;
-    }
-    const uint32_t rgba_size = (uint32_t)rgba_size_64;
-    uint8_t* rgba = (uint8_t*)malloc(rgba_size);
-    if (!rgba) {
-        pthread_mutex_unlock(&ctx->callback_mutex);
-        return;
-    }
-
-    const uint8_t* src = video->pixel_data;
-    switch (video->channels) {
-        case 1: // Grayscale -> RGBA
-            for (uint32_t i = 0; i < pixel_count; i++) {
-                const uint8_t v = src[i];
-                rgba[i * 4]     = v;
-                rgba[i * 4 + 1] = v;
-                rgba[i * 4 + 2] = v;
-                rgba[i * 4 + 3] = 255;
-            }
-            break;
-        case 3: // BGR -> RGBA
-            for (uint32_t i = 0; i < pixel_count; i++) {
-                rgba[i * 4]     = src[i * 3 + 2];
-                rgba[i * 4 + 1] = src[i * 3 + 1];
-                rgba[i * 4 + 2] = src[i * 3];
-                rgba[i * 4 + 3] = 255;
-            }
-            break;
-        case 4: // BGRA -> RGBA
-            for (uint32_t i = 0; i < pixel_count; i++) {
-                rgba[i * 4]     = src[i * 4 + 2];
-                rgba[i * 4 + 1] = src[i * 4 + 1];
-                rgba[i * 4 + 2] = src[i * 4];
-                rgba[i * 4 + 3] = src[i * 4 + 3];
-            }
-            break;
-        default: // Fallback: treat as grayscale
-            for (uint32_t i = 0; i < pixel_count; i++) {
-                const uint8_t v = src[i % video->pixel_data_length];
-                rgba[i * 4]     = v;
-                rgba[i * 4 + 1] = v;
-                rgba[i * 4 + 2] = v;
-                rgba[i * 4 + 3] = 255;
-            }
-            break;
-    }
-
-    bool original_delivered = false;
-    int remaining = matching;
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle == 0 || !sub->cbs.on_video) continue;
-        remaining--;
-        uint8_t* payload;
-        if (remaining == 0) {
-            payload = rgba;  // Last subscriber takes ownership of the original
-            original_delivered = true;
-        } else {
-            payload = (uint8_t*)malloc(rgba_size);
-            if (!payload) continue;
-            memcpy(payload, rgba, rgba_size);
-        }
-        sub->cbs.on_video(payload, rgba_size, video->width, video->height, 4, sub->cbs.user_data);
-    }
-    if (!original_delivered) {
-        free(rgba);
-    }
-
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
-
-/**
- * File status callback adapter
- * Called when device sends StatusFile response during file transfer.
- */
-static void on_file_status_adapter(eap_client* client,
-    const eap_file_status_response* status, void* user_data) {
-    (void)client;
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx || !status) {
-        LOGE("on_file_status_adapter: NULL ctx=%p or status=%p", (void*)ctx, (const void*)status);
-        return;
-    }
-
-    LOGD("on_file_status_adapter: status=%d progress=%d error='%s'",
-         (int)status->status, (int)status->progress,
-         (status->error_message[0] != '\0') ? status->error_message : "(none)");
-
-    pthread_mutex_lock(&ctx->callback_mutex);
-    int delivered = 0;
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle == 0 || !sub->cbs.on_file_status) continue;
-        // NativeCallable.listener posts to a Dart port — the callback runs
-        // asynchronously. Heap-allocate the error string PER SUBSCRIBER so it
-        // survives; each Dart side frees its own copy after reading.
-        char* error_msg = NULL;
-        if (status->status == EAP_FILE_STATUS_FAILED && status->error_message[0] != '\0') {
-            error_msg = strdup(status->error_message);
-        }
-        sub->cbs.on_file_status(
-            (uint16_t)status->status,
-            status->progress,
-            error_msg,
-            sub->cbs.user_data
-        );
-        delivered++;
-    }
-    if (delivered == 0) {
-        LOGE("on_file_status_adapter: no subscriber registered on_file_status — Dart will not receive this event!");
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
-
-/**
- * Logging callback adapter — forwards device log lines to Dart.
- * The message is heap-allocated (strdup) so it survives the async hop to
- * Dart via NativeCallable.listener; Dart frees it with flutter_eap_free.
- */
-static void on_logging_adapter(eap_client* client,
-    const eap_logging_response* log, void* user_data) {
-    (void)client;
-    bridge_context* ctx = (bridge_context*)user_data;
-    if (!ctx || !log) return;
-
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        eap_subscriber* sub = &ctx->subscribers[i];
-        if (sub->handle == 0 || !sub->cbs.on_logging) continue;
-        // strdup per subscriber: each Dart isolate frees its own copy.
-        char* msg = (log->message_len > 0) ? strdup(log->message) : NULL;
-        sub->cbs.on_logging(
-            (uint8_t)log->level,
-            msg,
-            log->header.timestamp_ms,
-            sub->cbs.user_data
-        );
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-}
 
 // =============================================================================
 // Public API Implementation
@@ -762,7 +451,7 @@ static void on_logging_adapter(eap_client* client,
 /**
  * Get the bridge context for the client, creating and registering it if this
  * is the first touch (transport config from Kotlin or callback registration
- * from Dart can each come first). calloc zeroes the subscriber table.
+ * from Dart can each come first).
  */
 static bridge_context* get_or_create_context(eap_client* client) {
     bridge_context* ctx = get_context_for_client(client);
@@ -776,44 +465,20 @@ static bridge_context* get_or_create_context(eap_client* client) {
         return NULL;
     }
 
-    pthread_mutex_init(&ctx->callback_mutex, NULL);
-    ctx->next_subscriber_handle = 1;
     ctx->client = client;
 
     register_client_context(client, ctx);
+
+    // Wire the Skyle Link glue's process hook (idempotent re-assignment):
+    // suspension changes fan out to every engine's subscriber slot via the
+    // shared fan-out module. Then install the glue's event adapters
+    // (supervisor hub events + client-level suspension callback) once - this
+    // runs with zero Dart engines when EapUsbHost starts the transport.
+    flutter_eap_link_glue_set_fanout_hook(flutter_eap_fanout_dispatch_suspend_state);
+    flutter_eap_link_glue_install(client);
+
     LOGD("get_or_create_context: Created new context for client %p", client);
     return ctx;
-}
-
-/**
- * Install the C adapter set on the core client. Idempotent - safe to call on
- * every subscriber registration (eap_client_set_callbacks overwrites with the
- * identical config).
- */
-static int install_core_adapters(eap_client* client, bridge_context* ctx) {
-    eap_callback_config callback_config = {
-        .on_gaze = on_gaze_adapter,
-        .on_positioning = on_positioning_adapter,
-        .on_version = on_version_adapter,
-        .on_control = on_control_adapter,
-        .on_calibration_point = on_calibration_point_adapter,
-        .on_calibration_progress = on_calibration_progress_adapter,
-        .on_calibration_paused = on_calibration_paused_adapter,
-        .on_calibration_finished = on_calibration_finished_adapter,
-        .on_video = on_video_adapter,
-        .on_file_status = on_file_status_adapter,
-        .on_logging = on_logging_adapter,
-        .on_state_change = on_state_change_adapter,
-        .on_error = on_error_adapter,
-        .user_data = ctx  // Pass bridge context as user data for callbacks
-    };
-
-    eap_result result = eap_client_set_callbacks(client, &callback_config);
-    if (result != EAP_OK) {
-        LOGE("install_core_adapters: eap_client_set_callbacks failed (%d)", result);
-        return (int)result;
-    }
-    return 0;
 }
 
 eap_client* flutter_eap_create_with_transport(void) {
@@ -964,6 +629,10 @@ eap_client* flutter_eap_get_instance(void) {
 }
 
 int64_t flutter_eap_add_callbacks(eap_client* client, const flutter_eap_callbacks* callbacks) {
+    return flutter_eap_add_callbacks_engine(client, callbacks, 0);
+}
+
+int64_t flutter_eap_add_callbacks_engine(eap_client* client, const flutter_eap_callbacks* callbacks, int64_t engine_token) {
     if (!client || !callbacks) {
         LOGE("flutter_eap_add_callbacks: NULL parameters");
         return -1;
@@ -974,27 +643,15 @@ int64_t flutter_eap_add_callbacks(eap_client* client, const flutter_eap_callback
         return -1;
     }
 
-    int64_t handle = 0;
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        if (ctx->subscribers[i].handle == 0) {
-            ctx->subscribers[i].handle = ctx->next_subscriber_handle++;
-            ctx->subscribers[i].cbs = *callbacks;
-            ctx->subscribers[i].calib_left_copy = NULL;
-            ctx->subscribers[i].calib_right_copy = NULL;
-            handle = ctx->subscribers[i].handle;
-            break;
-        }
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-
-    if (handle == 0) {
+    // Table + adapter installation live in the shared fan-out module. On
+    // Android Dart passes no engine token (0) - stale-subscriber reaping is
+    // the Kotlin plugin's job (reportSubscriberHandle -> onDetachedFromEngine).
+    int64_t handle = flutter_eap_fanout_add(client, callbacks, engine_token);
+    if (handle == -2) {
         LOGE("flutter_eap_add_callbacks: Subscriber table full (%d slots)", FLUTTER_EAP_MAX_SUBSCRIBERS);
         return -2;
     }
-
-    if (install_core_adapters(client, ctx) != 0) {
-        flutter_eap_remove_callbacks(client, handle);
+    if (handle <= 0) {
         return -1;
     }
 
@@ -1012,20 +669,10 @@ int flutter_eap_remove_callbacks(eap_client* client, int64_t handle) {
         return -1;
     }
 
-    int result = -1;
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        if (ctx->subscribers[i].handle == handle) {
-            free_subscriber_slot(&ctx->subscribers[i]);
-            result = 0;
-            break;
-        }
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-
-    // Deliberately do NOT unregister the core adapters even when the table is
-    // now empty: other engines may subscribe at any time, and empty-table
-    // adapters are cheap no-ops.
+    // The module deliberately does NOT unregister the core adapters even when
+    // the table is now empty: other engines may subscribe at any time, and
+    // empty-table adapters are cheap no-ops.
+    int result = flutter_eap_fanout_remove(handle);
     LOGD("flutter_eap_remove_callbacks: handle=%lld -> %s", (long long)handle,
          result == 0 ? "removed" : "not found");
     return result;
@@ -1042,20 +689,9 @@ int flutter_eap_set_callbacks(eap_client* client, const flutter_eap_callbacks* c
         return -1;
     }
 
-    // Legacy replace-all-with-one semantics: clear the whole subscriber table,
-    // then register the caller as the only subscriber. Preserves the pre-fan-out
-    // single-owner behavior for callers that never migrated to add_callbacks.
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        if (ctx->subscribers[i].handle != 0) {
-            free_subscriber_slot(&ctx->subscribers[i]);
-        }
-    }
-    ctx->subscribers[0].handle = ctx->next_subscriber_handle++;
-    ctx->subscribers[0].cbs = *callbacks;
-    pthread_mutex_unlock(&ctx->callback_mutex);
-
-    int result = install_core_adapters(client, ctx);
+    // Legacy replace-all-with-one semantics (module: clear the whole
+    // subscriber table, register the caller as the only subscriber).
+    int result = flutter_eap_fanout_set_single(client, callbacks);
     if (result != 0) {
         return result;
     }
@@ -1078,24 +714,14 @@ void flutter_eap_clear_callbacks(eap_client* client) {
         return;
     }
 
-    // Zero ALL subscriber slots under the mutex first so any adapter currently
-    // dispatching observes the change atomically.
-    pthread_mutex_lock(&ctx->callback_mutex);
-    for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-        if (ctx->subscribers[i].handle != 0) {
-            free_subscriber_slot(&ctx->subscribers[i]);
-        }
-    }
-    pthread_mutex_unlock(&ctx->callback_mutex);
-
-    // Also unregister our C adapters from eap_client so eap_process_message
-    // does not even reach them. Belt-and-suspenders against the case where
-    // the Dart NativeCallable has been closed without our destroy() running -
-    // e.g. engine teardown racing with an in-flight read on the I/O thread.
-    // A later flutter_eap_set_callbacks/add_callbacks call will re-register
-    // these adapters, so this is safe to do unconditionally.
-    eap_callback_config empty_config = {0};
-    eap_client_set_callbacks(client, &empty_config);
+    // Module: zero ALL subscriber slots under the mutex (atomic for any
+    // adapter currently dispatching), then unregister the C adapters from
+    // eap_client so eap_process_message does not even reach them.
+    // Belt-and-suspenders against the case where a Dart NativeCallable has
+    // been closed without our destroy() running - e.g. engine teardown racing
+    // with an in-flight read on the I/O thread. A later
+    // flutter_eap_set_callbacks/add_callbacks call re-registers the adapters.
+    flutter_eap_fanout_clear(client);
 
     LOGD("flutter_eap_clear_callbacks: Callbacks cleared successfully");
 }
@@ -1143,12 +769,6 @@ void flutter_eap_destroy(eap_client* client) {
                 ctx->kotlin_callback = NULL;
             }
         }
-
-        for (int i = 0; i < FLUTTER_EAP_MAX_SUBSCRIBERS; i++) {
-            free(ctx->subscribers[i].calib_left_copy);
-            free(ctx->subscribers[i].calib_right_copy);
-        }
-        pthread_mutex_destroy(&ctx->callback_mutex);
     }
 
     // Unregister from map
@@ -1179,8 +799,10 @@ int flutter_eap_connect(eap_client* client) {
         return 0;
     }
 
-    // If not disconnected, reset state first
-    if (current_state != EAP_STATE_DISCONNECTED) {
+    // If not disconnected, reset state first - but never while the transport
+    // supervisor runs (it would kill a healthy local link or a supervisor-
+    // managed USB session; eap_client_connect is a supervisor kick then).
+    if (current_state != EAP_STATE_DISCONNECTED && !skyle_link_supervisor_is_enabled()) {
         LOGD("flutter_eap_connect: Client not in DISCONNECTED state (%d), resetting...", (int)current_state);
         eap_client_disconnect(client);
         current_state = eap_client_get_state(client);
@@ -1356,7 +978,9 @@ const char* flutter_eap_get_last_error(eap_client* client) {
         return NULL;
     }
 
-    return ctx->last_error[0] != '\0' ? ctx->last_error : NULL;
+    // The error buffer lives in the fan-out module (its on_error adapter
+    // records the message before dispatching to the subscribers).
+    return flutter_eap_fanout_last_error();
 }
 
 // =============================================================================

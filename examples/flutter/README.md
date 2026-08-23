@@ -28,7 +28,9 @@ examples/flutter/
 
 - Flutter 3.27+ (`flutter --version`).
 - The prebuilt skylelib artifacts for the platform you're building (below).
-- macOS/iOS: Xcode + CocoaPods. Android: NDK r28+. Windows: Visual Studio + CMake.
+- macOS/iOS: Xcode + Swift Package Manager (`flutter config --enable-swift-package-manager`;
+  the example app has no Podfile on either Apple platform). Android: NDK r28+.
+  Windows: Visual Studio + CMake.
 
 ## 1. Get the native artifacts
 
@@ -67,9 +69,11 @@ flutter run -d macos          # verified
 # flutter run -d windows
 ```
 
-> **Verified:** the **macOS** target builds and runs here end to end. iPadOS,
-> Android and Windows are wired to the **same** prebuilt pattern but were not
-> built in this environment — build them on their respective toolchains.
+> **Verified:** the **macOS** target builds and runs here end to end. The
+> **iPadOS** target builds here for both the simulator and an (unsigned) device
+> release, but was not run against real hardware - that needs an MFi-provisioned
+> Skyle. Android and Windows are wired to the **same** prebuilt pattern but were
+> not built in this environment — build them on their respective toolchains.
 
 With a Skyle attached, the badge turns green ("Streaming") and the views come
 alive. With no device the window still launches and the badge stays gray — the
@@ -90,10 +94,18 @@ order (first hit wins):
 
 Where each platform links it:
 
-- **macOS / iOS** — `macos|ios/flutter_eap.podspec` (shared logic in
-  `darwin/skylelib_prebuilt.rb`) point `HEADER_SEARCH_PATHS` and `OTHER_LDFLAGS`
-  at the matching slice of `skylelib.xcframework` (per-SDK for iOS). Only the
-  shared Apple bridge is compiled; skylelib comes from the slice's `libskylelib.a`.
+- **macOS / iOS** - the Swift packages (`macos/flutter_eap/Package.swift`,
+  `ios/flutter_eap/Package.swift`) link `skylelib.xcframework` as a
+  `binaryTarget`: the local copy at `<platform>/flutter_eap/.skylelib/` when
+  present (create it with `flutter_eap/scripts/vendor_xcframework.sh`, same
+  resolution order as above), otherwise the checksum-pinned release zip. SPM
+  picks the slice per SDK, so the same manifest covers iOS device and simulator.
+  Only the shared Apple bridge is compiled; skylelib comes from the slice's
+  `libskylelib.a`. The example app builds this way on both platforms - it has no
+  Podfile, so nothing runs the podspecs' vendoring for it. CocoaPods consumers
+  of the plugin still get `macos|ios/flutter_eap.podspec`, which compile the same
+  sources (shared resolution logic in `darwin/skylelib_prebuilt.rb`); see
+  `docs/SDK_DISTRIBUTION.md` section 8.1.
 - **Android** — `android/build.gradle` resolves/downloads the SDK, adds its
   `jniLibs` to `jniLibs.srcDirs` (so the `.so` is packaged into the APK), and
   passes `-DSKYLELIB_DIST` to `android/CMakeLists.txt`.

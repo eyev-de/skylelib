@@ -1,3 +1,5 @@
+import Foundation
+
 public class BoundedQueue<T> {
   private var queue: [T] = []
   private let accessQueue = DispatchQueue(label: "de.eyev.boundedqueue")

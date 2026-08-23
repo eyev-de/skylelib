@@ -80,6 +80,57 @@ object EapClientJni {
      * @param handle Subscriber handle returned by flutter_eap_add_callbacks
      */
     external fun removeSubscriber(clientPtr: Long, handle: Long)
+
+    // =========================================================================
+    // Skyle Link (multi-app sharing via the automatic transport supervisor)
+    // =========================================================================
+
+    /**
+     * Set the Skyle Link identity: HELLO app id, priority tier (0 = skylex,
+     * 1 = partner, 2 = default), and whether this app currently holds the
+     * platform USB permission for the tracker. Safe to call repeatedly -
+     * re-push whenever the permission state changes; the supervisor reacts
+     * on its next evaluation.
+     */
+    external fun setIdentity(appId: String, tier: Int, usbCapable: Boolean)
+
+    /**
+     * Enable/disable the automatic transport supervisor. Enabling returns
+     * immediately (the OWNER/CLIENT decision lands on the supervisor thread).
+     * Disabling is a deliberate stop: OWNER sends BYE(handover) to all hub
+     * clients and releases USB via the ownership listener, CLIENT closes;
+     * no re-election happens until re-enabled.
+     */
+    external fun setSupervisorEnabled(enabled: Boolean)
+
+    /**
+     * Register the USB ownership listener. The supervisor grants ownership
+     * (wanted=true: open/claim the USB device) and releases it (wanted=false:
+     * close/release) through it. Fired on native supervisor threads - hop to
+     * a handler for the USB work and never block. Passing null clears the
+     * listener and the native callback slot.
+     */
+    external fun setUsbOwnershipListener(listener: UsbOwnershipListener?)
+
+    /**
+     * Disconnect the client and stop its background thread. Only effective
+     * after setHostOwned(false) - while host-owned the native bridge
+     * suppresses disconnects. Used by EapUsbHost.stop().
+     *
+     * @param clientPtr Native pointer to eap_client
+     */
+    external fun disconnect(clientPtr: Long): Int
+}
+
+/**
+ * Skyle Link supervisor USB ownership grants. wanted=true: open/claim the
+ * USB device and keep feeding the registered transport; wanted=false: close
+ * the device and release the interface claim (handover/preempt/disable).
+ * Fired on native supervisor threads - implementations must hop to a handler
+ * for the USB work and never block the caller.
+ */
+interface UsbOwnershipListener {
+    fun onUsbOwnershipChanged(wanted: Boolean)
 }
 
 /**

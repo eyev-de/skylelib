@@ -1,9 +1,11 @@
 /// FFI wrapper for EAP client
 /// Manages native client lifecycle and callbacks
+library;
 
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart';
 
@@ -23,15 +25,37 @@ class EapClientFfi {
   // Track if we've been destroyed to prevent double-destroy
   bool _isDestroyed = false;
 
-  // Multi-engine fan-out (Android): this engine's native subscriber handle.
+  // Multi-engine fan-out: this engine's native subscriber handle.
   // 0 = not registered via the subscriber API.
   int _subscriberHandle = 0;
 
-  /// True when the multi-engine subscriber API should be used: Android, where
-  /// several Flutter engines (main app + accessibility overlays) share one
-  /// host-owned native client. Other platforms keep the single-subscriber
-  /// set/clear flow.
-  bool get _useSubscriberApi => Platform.isAndroid && _bindings?.addCallbacks != null;
+  /// True when the multi-engine subscriber API is used: all pull-mode
+  /// platforms (Android, macOS, Windows, Linux), where several Flutter
+  /// engines (main window + overlays/sub-windows) share one process-wide
+  /// native client and each registers its own callback subscriber. iOS stays
+  /// single-slot push mode; a null lookup (older shim binary) degrades a
+  /// desktop platform to the legacy single-slot flow.
+  bool get _useSubscriberApi {
+    if (Platform.isIOS) return false;
+    final bindings = _bindings;
+    if (bindings == null) return false;
+    return Platform.isAndroid ? bindings.addCallbacks != null : bindings.addCallbacksEngine != null;
+  }
+
+  /// True when this engine shares the process-wide native client through the
+  /// subscriber fan-out. Engine teardown must then only remove this engine's
+  /// subscription, never stop the shared transport (see [EapClient.dispose]).
+  bool get sharesNativeClient => _useSubscriberApi;
+
+  /// Subscriber engine token: the native engine id, which identifies the
+  /// ENGINE (not the Dart isolate) and therefore survives a hot restart -
+  /// exactly the case where the native table still holds the previous
+  /// isolate's dead subscriber. On desktop the token is passed to
+  /// flutter_eap_add_callbacks_engine, whose same-token re-add reaps that
+  /// stale entry (Android reaps via Kotlin instead and passes no token).
+  /// Falls back to 0 when no engine id is available (tests); the native side
+  /// then skips reaping and behaves like a plain add.
+  static int _engineToken() => PlatformDispatcher.instance.engineId ?? 0;
 
   // NativeCallable listeners (for callbacks from native threads)
   NativeCallable<DartGazeCallback>? _gazeCallable;
@@ -47,6 +71,7 @@ class EapClientFfi {
   NativeCallable<DartLoggingCallback>? _loggingCallable;
   NativeCallable<DartStateCallback>? _stateCallable;
   NativeCallable<DartErrorCallback>? _errorCallable;
+  NativeCallable<DartSuspendStateCallback>? _suspendStateCallable;
 
   // Stream controllers for callbacks
   final _gazeController = StreamController<GazesData>.broadcast();
@@ -59,6 +84,11 @@ class EapClientFfi {
   final _errorController = StreamController<String>.broadcast();
   final _logController = StreamController<EapLogMessage>.broadcast();
   final _deviceLogController = StreamController<EapLogMessage>.broadcast();
+  final _suspensionController = StreamController<SkyleLinkSuspendState>.broadcast();
+
+  // Skyle Link suspension state, mirrored from the native glue's cache so new
+  // listeners can seed synchronously ([suspensionStream] only carries changes).
+  SkyleLinkSuspendState _currentSuspension = const SkyleLinkSuspendState(suspended: false);
 
   // Completer for version request with timeout
   Completer<VersionData>? _versionCompleter;
@@ -90,6 +120,27 @@ class EapClientFfi {
   /// Log lines streamed from the firmware over EAP. Distinct from [logStream],
   /// which carries diagnostics emitted by this Dart layer.
   Stream<EapLogMessage> get deviceLogStream => _deviceLogController.stream;
+
+  /// Skyle Link suspension changes. Sources per mode: hub owner - the hub's
+  /// SUSPEND_CHANGED events; local-link client - the skyle_link suspend
+  /// callback. Both are fanned out through this engine's subscriber slot
+  /// (onSuspendState) on every fan-out platform; iOS never emits (no
+  /// supervisor). Seed new listeners from [currentSuspensionState].
+  Stream<SkyleLinkSuspendState> get suspensionStream => _suspensionController.stream;
+
+  /// Current Skyle Link suspension state (seeded from the native glue cache
+  /// in [create]; kept current by [suspensionStream] events).
+  SkyleLinkSuspendState get currentSuspensionState => _currentSuspension;
+
+  /// True while the automatic transport supervisor runs this client as a
+  /// Skyle Link local-link client (SKYLE_LINK_SUPERVISOR_CLIENT == 3), i.e.
+  /// the active transport is a socket to another process's hub. The
+  /// supervisor may flip this at any time (live handovers).
+  bool get isLocalLink => (_bindings?.getSupervisorMode?.call() ?? 0) == 3;
+
+  /// True while the automatic transport supervisor runs this process as the
+  /// Skyle Link hub owner (SKYLE_LINK_SUPERVISOR_OWNER == 2).
+  bool get isHubOwner => (_bindings?.getSupervisorMode?.call() ?? 0) == 2;
 
   /// Emit a diagnostic message on [logStream].
   void emitLog(LogLevel level, String source, String message) {
@@ -136,6 +187,11 @@ class EapClientFfi {
   /// from before the Dart VM restart), swaps Dart callback pointers without
   /// destroying the native client. This keeps the USB connection alive across
   /// hot restarts.
+  ///
+  /// Transport selection (USB vs Skyle Link socket) is fully automatic - the
+  /// native supervisor owns it. Dart only installs the glue's link adapters
+  /// (idempotent) and, on desktop, enables the supervisor via
+  /// [configureLinkSupervisor] after this returns.
   void create() {
     if (_bindings == null) {
       throw StateError('Bindings not initialized - call initializeBindings()');
@@ -150,11 +206,13 @@ class EapClientFfi {
     // (getInstance creates on demand, so it always returns non-null)
     final isHotRestart = _bindings!.isInitialized();
 
-    // Android uses the multi-engine fan-out path below and must NOT clear the
-    // whole callback table here - other engines' subscriptions live in it.
+    // Fan-out platforms use the subscriber path below and must NOT clear the
+    // whole callback table here - other engines' subscriptions live in it
+    // (a hot-restarted engine's stale subscriber is reaped by Kotlin on
+    // Android and by the same-token re-add on desktop).
     if (isHotRestart && !_useSubscriberApi) {
-      // HOT RESTART PATH: Native client is alive (background thread running,
-      // USB transport active). Just swap the Dart callback pointers.
+      // HOT RESTART PATH (iOS single-slot): Native client is alive
+      // (transport active). Just swap the Dart callback pointers.
       _emitLog(LogLevel.information, 'EapClientFfi', 'Hot restart detected - swapping callbacks (keeping connection alive)');
 
       // Clear stale Dart callbacks first (mutex-protected in C bridge).
@@ -178,6 +236,7 @@ class EapClientFfi {
     _loggingCallable = NativeCallable<DartLoggingCallback>.listener(_onLoggingCallback);
     _stateCallable = NativeCallable<DartStateCallback>.listener(_onStateCallback);
     _errorCallable = NativeCallable<DartErrorCallback>.listener(_onErrorCallback);
+    _suspendStateCallable = NativeCallable<DartSuspendStateCallback>.listener(_onSuspendStateCallback);
 
     // Allocate callbacks structure
     _callbacksPtr = calloc<FlutterEapCallbacks>();
@@ -195,22 +254,39 @@ class EapClientFfi {
       ..onLogging = _loggingCallable!.nativeFunction
       ..onStateChange = _stateCallable!.nativeFunction
       ..onError = _errorCallable!.nativeFunction
-      ..userData = Pointer.fromAddress(hashCode); // Use Dart object hash as ID
+      ..userData = Pointer.fromAddress(hashCode) // Use Dart object hash as ID
+      ..onSuspendState = _suspendStateCallable!.nativeFunction; // Appended field - dispatched by the fan-out (never fires on iOS)
 
     // Register this instance for callback lookup
     _registerInstance(hashCode, this);
 
+    // Seed the Skyle Link suspension cache (the hub or an earlier local link
+    // may have recorded a suspension before this engine subscribed). Change
+    // events arrive through each subscriber's onSuspendState field.
+    _seedSuspensionState();
+
     if (_useSubscriberApi) {
-      // MULTI-ENGINE PATH (Android): register this engine as an additional
-      // callback subscriber on the (possibly already running, host-owned)
-      // native client. Other engines' subscriptions stay untouched.
+      // MULTI-ENGINE FAN-OUT PATH (Android, macOS, Windows, Linux): register
+      // this engine as an additional callback subscriber on the (possibly
+      // already running) shared native client. Other engines' subscriptions
+      // stay untouched.
       _clientPtr = _bindings!.getInstance();
       if (_clientPtr == null || _clientPtr!.address == 0) {
         _cleanup();
         throw StateError('Failed to get native client instance');
       }
 
-      final handle = _bindings!.addCallbacks!(_clientPtr!, _callbacksPtr!);
+      // Idempotent - the Android bridge already installed the glue when the
+      // service-owned host created the context; this covers plugin-only runs
+      // and the desktop engines.
+      _bindings!.linkGlueInstall?.call(_clientPtr!);
+
+      // Android reaps stale subscribers via Kotlin (reportSubscriberHandle ->
+      // onDetachedFromEngine); desktop passes the engine token so a re-add
+      // after hot restart atomically reaps the previous isolate's subscriber.
+      final handle = Platform.isAndroid
+          ? _bindings!.addCallbacks!(_clientPtr!, _callbacksPtr!)
+          : _bindings!.addCallbacksEngine!(_clientPtr!, _callbacksPtr!, _engineToken());
       if (handle <= 0) {
         _cleanup();
         throw StateError('Failed to add callback subscriber (error: $handle)');
@@ -218,20 +294,24 @@ class EapClientFfi {
       _subscriberHandle = handle;
       _emitLog(LogLevel.information, 'EapClientFfi', 'Registered callback subscriber (handle=$handle)');
 
-      // Report the handle to the Kotlin plugin instance so onDetachedFromEngine
-      // can remove exactly this engine's subscription (and reap a stale handle
-      // from a previous isolate after hot restart).
-      unawaited(_reportSubscriberHandle(handle));
+      if (Platform.isAndroid) {
+        // Report the handle to the Kotlin plugin instance so onDetachedFromEngine
+        // can remove exactly this engine's subscription (and reap a stale handle
+        // from a previous isolate after hot restart).
+        unawaited(_reportSubscriberHandle(handle));
+      }
 
-      // The transport may already be LINK_SYNCED (host-owned, running since
-      // service start), in which case no state transition will ever reach this
-      // fresh engine - seed the stream with the current state.
+      // The transport may already be LINK_SYNCED (host-owned/running since
+      // before this engine), in which case no state transition will ever reach
+      // this fresh engine - seed the stream with the current state.
       final seededState = currentState;
       _emitLog(LogLevel.information, 'EapClientFfi', 'Seeding connection state after subscribe: $seededState');
       _stateController.add(seededState);
 
-      // Idempotent fallback: brings the transport up when the accessibility
-      // service has not (first run without the service, plain plugin usage).
+      // Idempotent everywhere: Android's Kotlin host guards USB bring-up, and
+      // the desktop plugins configure the native transport only once per
+      // process (a static isTransportConfigured flag), so later engines and
+      // hot restarts no-op instead of resetting a live link.
       unawaited(_configureTransport());
       return;
     }
@@ -239,6 +319,7 @@ class EapClientFfi {
     if (isHotRestart) {
       // Reuse existing native client - just install new callbacks
       _clientPtr = _bindings!.getInstance();
+      _bindings!.linkGlueInstall?.call(_clientPtr!);
 
       final result = _bindings!.setCallbacks(_clientPtr!, _callbacksPtr!);
       if (result != 0) {
@@ -266,6 +347,10 @@ class EapClientFfi {
       throw StateError('Failed to get native client instance');
     }
 
+    // Install the Skyle Link glue adapters (supervisor hub events +
+    // client-level link callbacks) once per process.
+    _bindings!.linkGlueInstall?.call(_clientPtr!);
+
     // Set callbacks on the singleton client
     final result = _bindings!.setCallbacks(_clientPtr!, _callbacksPtr!);
     if (result != 0) {
@@ -273,14 +358,65 @@ class EapClientFfi {
       throw StateError('Failed to set callbacks (error: $result)');
     }
 
-    // Signal native layer to configure transport now that Dart callbacks are ready
-    // This starts the C background thread which will detect USB and begin handshake
-    // Android: Kotlin configures USB Host transport via JNI
-    // iOS: Swift configures ExternalAccessory transport via C function pointers
-    // macOS: C configures IOKit USB transport directly
+    // Signal native layer to configure transport now that Dart callbacks are
+    // ready. This path is iOS (push mode) plus the legacy single-slot fallback
+    // for desktop binaries without the fan-out exports.
     if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS || Platform.isWindows) {
       _configureTransport();
     }
+  }
+
+  /// Seed [_currentSuspension] from the native glue cache (the hub or an
+  /// earlier local link may have recorded a suspension before this engine
+  /// subscribed).
+  void _seedSuspensionState() {
+    final getState = _bindings?.getSuspensionState;
+    if (getState == null) return;
+    const bufLen = 129; // SKYLE_LINK_MAX_APP_ID + 1
+    final suspendedPtr = calloc<Bool>();
+    final holderBuf = calloc<Uint8>(bufLen);
+    try {
+      getState(suspendedPtr, holderBuf.cast(), bufLen);
+      final suspended = suspendedPtr.value;
+      final holder = suspended ? holderBuf.cast<Utf8>().toDartString() : '';
+      _currentSuspension = SkyleLinkSuspendState(suspended: suspended, holderAppId: holder.isNotEmpty ? holder : null);
+    } finally {
+      calloc.free(suspendedPtr);
+      calloc.free(holderBuf);
+    }
+  }
+
+  /// Enable the automatic Skyle Link transport supervisor (desktop only -
+  /// EapClient.initialize gates the platforms). Publishes [identity] first
+  /// when one was supplied (usb_capable is always true on desktop: the
+  /// built-in transports need no platform permission); with a null identity
+  /// the native defaults apply (third-party app id, default tier). Safe to
+  /// call repeatedly (hot restart re-initialize).
+  void configureLinkSupervisor(SkyleLinkIdentity? identity) {
+    final bindings = _bindings;
+    if (bindings == null || bindings.setSupervisorEnabled == null) {
+      _emitLog(LogLevel.warning, 'SkyleLink', 'Native library has no supervisor support - staying on direct USB');
+      return;
+    }
+    if (identity != null) {
+      final appIdPtr = identity.appId.toNativeUtf8();
+      try {
+        bindings.setLinkIdentity?.call(appIdPtr, identity.priorityTier, true);
+      } finally {
+        calloc.free(appIdPtr);
+      }
+    }
+    bindings.setSupervisorEnabled!(true);
+    _emitLog(LogLevel.information, 'SkyleLink', 'Transport supervisor enabled${identity != null ? ' as "${identity.appId}" (tier ${identity.priorityTier})' : ' with native default identity'}');
+  }
+
+  /// Request or release eye-control suspension (local-link client mode only).
+  /// Returns the native eap_result (0 = accepted by the hub layer).
+  int setLinkSuspended(bool suspended) {
+    _checkClient();
+    final setSuspended = _bindings!.linkSetSuspended;
+    if (setSuspended == null) return -1;
+    return setSuspended(_clientPtr!, suspended);
   }
 
   /// Report this engine's native subscriber handle to its Kotlin plugin
@@ -291,6 +427,18 @@ class EapClientFfi {
       await _methodChannel.invokeMethod<bool>('reportSubscriberHandle', handle);
     } catch (e) {
       _emitLog(LogLevel.warning, 'EapClientFfi', 'Failed to report subscriber handle: $e');
+    }
+  }
+
+  /// Ask the Kotlin host to stop the process-wide USB transport + Skyle Link
+  /// hub (orderly handover; see EapUsbHost.stop). Android only - a no-op
+  /// elsewhere (desktop owns its transport in-process).
+  static Future<void> stopUsbHost() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _methodChannel.invokeMethod<bool>('stopUsbHost');
+    } catch (e) {
+      _emitLog(LogLevel.error, 'EapClientFfi', 'stopUsbHost failed: $e');
     }
   }
 
@@ -331,19 +479,22 @@ class EapClientFfi {
     _emitLog(LogLevel.information, 'EapClientFfi', 'destroy() called - starting cleanup');
 
     if (_useSubscriberApi && _subscriberHandle != 0) {
-      // MULTI-ENGINE PATH (Android): remove only this engine's subscriber.
+      // MULTI-ENGINE FAN-OUT PATH: remove only this engine's subscriber.
       // The removal is mutex-synchronized with the dispatch thread, so after
       // it returns no native thread can invoke our NativeCallables. The
-      // host-owned client itself is never destroyed from Dart (the native
-      // flutter_eap_destroy is a no-op while host-owned anyway).
+      // shared client itself is never destroyed from a subscriber engine
+      // (on Android the native flutter_eap_destroy is a no-op while
+      // host-owned anyway; on desktop the process owns the transport).
       if (_clientPtr != null && _bindings != null) {
         _bindings!.removeCallbacks!(_clientPtr!, _subscriberHandle);
         _emitLog(LogLevel.debug, 'EapClientFfi', 'Removed callback subscriber (handle=$_subscriberHandle)');
       }
       _subscriberHandle = 0;
       _clientPtr = null;
-      // Tell Kotlin the handle is gone so onDetachedFromEngine won't remove it again.
-      unawaited(_methodChannel.invokeMethod<bool>('clearSubscriberHandle').catchError((_) => false));
+      if (Platform.isAndroid) {
+        // Tell Kotlin the handle is gone so onDetachedFromEngine won't remove it again.
+        unawaited(_methodChannel.invokeMethod<bool>('clearSubscriberHandle').catchError((_) => false));
+      }
 
       _unregisterInstance(hashCode);
       _cleanup();
@@ -360,6 +511,11 @@ class EapClientFfi {
 
     // Step 2: Destroy native client (this stops background thread and waits for it)
     if (_clientPtr != null && _bindings != null) {
+      // Deliberate supervisor stop BEFORE the client goes away: as OWNER it
+      // sends BYE(handover) and stops the hub (which taps the client's raw
+      // message path), as CLIENT it closes the local link. No-op when the
+      // supervisor was never enabled (iOS) or the shim lacks support.
+      _bindings!.setSupervisorEnabled?.call(false);
       _emitLog(LogLevel.debug, 'EapClientFfi', 'Destroying native client');
       _bindings!.destroy(_clientPtr!);
       _clientPtr = null;
@@ -403,6 +559,7 @@ class EapClientFfi {
     _loggingCallable?.close();
     _stateCallable?.close();
     _errorCallable?.close();
+    _suspendStateCallable?.close();
 
     _gazeCallable = null;
     _positioningCallable = null;
@@ -417,6 +574,7 @@ class EapClientFfi {
     _loggingCallable = null;
     _stateCallable = null;
     _errorCallable = null;
+    _suspendStateCallable = null;
 
     // Close stream controllers
     _gazeController.close();
@@ -429,6 +587,7 @@ class EapClientFfi {
     _errorController.close();
     _logController.close();
     _deviceLogController.close();
+    _suspensionController.close();
   }
 
   // ==========================================================================
@@ -901,6 +1060,26 @@ class EapClientFfi {
     final stateObj = ConnectionState.fromValue(state);
     _emitLog(LogLevel.information, 'EapClientFfi', 'State changed: $stateObj');
     instance._stateController.add(stateObj);
+  }
+
+  static void _onSuspendStateCallback(bool suspended, Pointer<Utf8> holder, Pointer<Void> userData) {
+    // holder is a per-delivery heap copy from the glue/bridge - free it even
+    // when no instance is around to consume the event.
+    String? holderAppId;
+    if (holder.address != 0) {
+      holderAppId = holder.toDartString();
+      _nativeFree(holder.cast());
+    }
+
+    final instance = _instance;
+    if (instance == null) return;
+
+    final state = SkyleLinkSuspendState(suspended: suspended, holderAppId: suspended ? holderAppId : null);
+    instance._currentSuspension = state;
+    _emitLog(LogLevel.information, 'SkyleLink', 'Suspension changed: $state');
+    if (!instance._suspensionController.isClosed) {
+      instance._suspensionController.add(state);
+    }
   }
 
   static void _onErrorCallback(Pointer<Utf8> errorMessage, Pointer<Void> userData) {

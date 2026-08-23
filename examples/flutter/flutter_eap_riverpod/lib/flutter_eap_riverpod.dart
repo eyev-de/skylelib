@@ -6,7 +6,7 @@
 ///
 /// If you use another state manager, depend on `flutter_eap` directly and
 /// skip this package.
-library flutter_eap_riverpod;
+library;
 
 // Full flutter_eap API (EapClient + data models) for convenience.
 export 'package:flutter_eap/flutter_eap.dart';

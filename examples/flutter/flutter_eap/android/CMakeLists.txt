@@ -33,13 +33,17 @@ set_target_properties(skylelib PROPERTIES IMPORTED_LOCATION "${SKYLELIB_LIB}")
 
 # --- Bridge (Dart FFI + Kotlin JNI) ------------------------------------------
 add_library(flutter_eap SHARED
-    src/main/cpp/flutter_eap_bridge.c  # Dart FFI bridge
-    src/main/cpp/jni_bridge.c          # Kotlin JNI bridge
+    src/main/cpp/flutter_eap_bridge.c        # Dart FFI bridge
+    src/main/cpp/jni_bridge.c                # Kotlin JNI bridge
+    ../native/link/flutter_eap_link_glue.c   # Skyle Link glue (shared, all platforms)
+    ../native/fanout/flutter_eap_fanout.c    # Multi-engine callback fan-out (shared, pull-mode platforms)
 )
 
 target_include_directories(flutter_eap PRIVATE
     ${SKYLELIB_INCLUDE}            # for the headers' own <skylelib/...> includes
     ${SKYLELIB_INCLUDE}/skylelib   # for the bridge's flat <eap_client.h>, <eap/...>
+    ../native/link                 # for the shared Skyle Link glue header
+    ../native/fanout               # for the shared fan-out header
 )
 
 target_link_libraries(flutter_eap

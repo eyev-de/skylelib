@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "flutter_eap_bridge.h"
+#include "flutter_eap_link_glue.h"
 
 #define LOG_TAG "JniBridge"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -170,4 +171,82 @@ Java_de_eyev_flutter_1eap_EapClientJni_removeSubscriber(
     eap_client* client = (eap_client*)(uintptr_t)clientPtr;
     int result = flutter_eap_remove_callbacks(client, (int64_t)handle);
     LOGD("removeSubscriber: handle=%lld -> %d", (long long)handle, result);
+}
+
+// =============================================================================
+// Skyle Link (automatic transport supervisor) JNI wrappers
+// =============================================================================
+
+/**
+ * Set the Skyle Link identity (HELLO app id, priority tier, USB permission
+ * state). Safe to call repeatedly - the supervisor picks the change up on its
+ * next evaluation (usb_capable flips when Android grants/loses the USB
+ * permission).
+ */
+JNIEXPORT void JNICALL
+Java_de_eyev_flutter_1eap_EapClientJni_setIdentity(
+    JNIEnv* env,
+    jobject obj,
+    jstring appId,
+    jint tier,
+    jboolean usbCapable
+) {
+    (void)obj;
+    if (!appId) return;
+    const char* app_id = (*env)->GetStringUTFChars(env, appId, NULL);
+    if (!app_id) return;
+    flutter_eap_set_identity(app_id, (uint8_t)tier, usbCapable == JNI_TRUE);
+    (*env)->ReleaseStringUTFChars(env, appId, app_id);
+}
+
+/**
+ * Enable/disable the automatic transport supervisor. Enabling returns
+ * immediately (the mode decision lands on the supervisor thread); disabling
+ * is a deliberate stop: OWNER sends BYE(handover) + releases USB via the
+ * ownership listener, CLIENT closes.
+ */
+JNIEXPORT void JNICALL
+Java_de_eyev_flutter_1eap_EapClientJni_setSupervisorEnabled(
+    JNIEnv* env,
+    jobject obj,
+    jboolean enabled
+) {
+    (void)env;
+    (void)obj;
+    flutter_eap_set_supervisor_enabled(enabled == JNI_TRUE);
+}
+
+/**
+ * Register the Kotlin USB ownership listener (onUsbOwnershipChanged). The
+ * supervisor grants/releases USB ownership through it; fires on supervisor
+ * threads. NULL clears.
+ */
+JNIEXPORT void JNICALL
+Java_de_eyev_flutter_1eap_EapClientJni_setUsbOwnershipListener(
+    JNIEnv* env,
+    jobject obj,
+    jobject listener
+) {
+    (void)obj;
+    flutter_eap_set_kotlin_usb_ownership_listener(env, listener);
+}
+
+/**
+ * Disconnect the client and stop its background thread. Used by
+ * EapUsbHost.stop() AFTER clearing host ownership (while host-owned the
+ * bridge suppresses disconnects).
+ */
+JNIEXPORT jint JNICALL
+Java_de_eyev_flutter_1eap_EapClientJni_disconnect(
+    JNIEnv* env,
+    jobject obj,
+    jlong clientPtr
+) {
+    (void)env;
+    (void)obj;
+    if (clientPtr == 0) return -1;
+    eap_client* client = (eap_client*)(uintptr_t)clientPtr;
+    int result = flutter_eap_disconnect(client);
+    LOGD("disconnect: -> %d", result);
+    return (jint)result;
 }

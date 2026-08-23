@@ -10,6 +10,51 @@
 - Dropped unused dependencies: `collection`, `plugin_platform_interface`,
   `riverpod`, `riverpod_annotation` (and the codegen dev dependencies).
 
+### Changed
+
+- Both Apple platforms now build as Swift Packages, dual with CocoaPods:
+  `macos/flutter_eap/Package.swift` and `ios/flutter_eap/Package.swift`, with
+  the sources moved to `<platform>/flutter_eap/Sources/` (Swift target
+  `flutter_eap` + C target `flutter_eap_bridge`, since SPM allows no mixed
+  target). The podspecs compile the SAME files and keep working for CocoaPods
+  consumers; the prebuilt `skylelib.xcframework` is a `binaryTarget` resolved
+  from `<platform>/flutter_eap/.skylelib/` (created by `pod install` or by
+  `scripts/vendor_xcframework.sh`) or from the checksum-pinned GitHub release.
+  Apps that enable Swift Package Manager in the Flutter tool need no Podfile on
+  macOS or iOS any more.
+- iOS minimum deployment target lowered from 14.0 to 13.0 - the floor of the
+  prebuilt iOS slices and of Flutter itself. A higher package minimum than the
+  consuming app's target fails SPM resolution outright.
+- The multi-engine callback fan-out (previously Android-only) is now the
+  mechanism on ALL pull-mode platforms (Android, macOS, Windows, Linux):
+  every Flutter engine in a process registers its own subscriber and receives
+  all callbacks independently (shared module `native/fanout/`). Desktop
+  engines register with an engine token (`flutter_eap_add_callbacks_engine`);
+  a re-add with the same token after a hot restart reaps the stale subscriber
+  natively. The short-lived desktop primary/passive engine guard
+  (`flutter_eap_try_acquire_primary` / `flutter_eap_release_primary`) and the
+  process-wide Dart suspension slot
+  (`flutter_eap_set_suspend_state_callback`) are removed - suspension events
+  now reach every engine through its subscriber's `on_suspend_state`. iOS
+  stays single-slot push mode.
+
+### Fixed
+
+- iOS: `BoundedQueue.swift` and `OutputStreamManager.swift` were missing
+  `import Foundation` and could not compile (both use `DispatchQueue` /
+  `DispatchSemaphore` / `Data`).
+- Android: the USB ownership grant now restarts the EAP client's background
+  threads (the supervisor stops them on every release; the Kotlin listener
+  only re-opens the USB device). Without this, any ownership cycle after the
+  initial bring-up (USB unplug/replug, a Skyle Link handover) opened the
+  device but never read from it - the tracker's 2.5 s heartbeat timeout then
+  soft-reset it in an endless USB detach/re-enumerate loop.
+- Android: `EapUsbHost` no longer claims the reserved skylex/tier-0 Skyle
+  Link identity for every host-owning consumer app. Only the Skyle X package
+  (`de.eyev.skylex`) gets tier 0; every other app resolves its identity from
+  the `de.eyev.flutter_eap.APP_ID` / `PRIORITY_TIER` manifest meta-data
+  (default: packageName, tier 2 - same keys as the pure-client path).
+
 ## 0.0.1 - November 2, 2025
 
 ### Initial Release

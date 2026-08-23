@@ -16,7 +16,7 @@ def skylelib_pubspec_version(plugin_dir)
   v
 end
 
-# Copy the resolved skylelib.xcframework into <podspec_dir>/.skylelib/ and
+# Copy the resolved skylelib.xcframework into <podspec_dir>/<subdir>/ and
 # return its path relative to the podspec dir, for use as s.vendored_frameworks.
 #
 # Why vendor instead of OTHER_LDFLAGS: with `use_frameworks! :linkage => :static`
@@ -28,17 +28,23 @@ end
 # is needed because CocoaPods file accessors only see paths inside the pod root
 # (the podspec directory); SKYLELIB_DIST, the repo dist/ and the download cache
 # all live outside it.
-def skylelib_vendor_xcframework(podspec_dir)
+#
+# The macOS podspec vendors into flutter_eap/.skylelib (INSIDE the Swift
+# package at macos/flutter_eap) so the same copy doubles as the local
+# binaryTarget of Package.swift - `pod install` thereby also provisions the
+# Swift Package Manager build. Pure-SPM setups create the identical copy with
+# <plugin>/scripts/vendor_xcframework.sh.
+def skylelib_vendor_xcframework(podspec_dir, subdir = '.skylelib')
   dist = skylelib_resolve_dist(podspec_dir)
   src  = File.join(dist, 'skylelib.xcframework')
   raise "flutter_eap: no skylelib.xcframework in #{dist}" unless File.directory?(src)
   require 'fileutils'
-  dst = File.join(podspec_dir, '.skylelib', 'skylelib.xcframework')
+  dst = File.join(podspec_dir, subdir, 'skylelib.xcframework')
   FileUtils.rm_rf(dst)
   FileUtils.mkdir_p(File.dirname(dst))
   # preserve mtimes so unchanged binaries do not retrigger Xcode rebuilds
   FileUtils.cp_r(src, dst, preserve: true)
-  File.join('.skylelib', 'skylelib.xcframework')
+  File.join(subdir, 'skylelib.xcframework')
 end
 
 def skylelib_resolve_dist(podspec_dir)

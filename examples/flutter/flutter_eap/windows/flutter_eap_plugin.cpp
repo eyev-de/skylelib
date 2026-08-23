@@ -17,6 +17,7 @@ static const uint16_t kSkyleVendorId = 0x3729;
 static const uint16_t kSkyleProductId = 0x7333;
 
 bool FlutterEapPlugin::is_transport_configured_ = false;
+int FlutterEapPlugin::instance_count_ = 0;
 
 void FlutterEapPlugin::RegisterWithRegistrar(
     flutter::PluginRegistrarWindows* registrar) {
@@ -34,15 +35,20 @@ void FlutterEapPlugin::RegisterWithRegistrar(
   registrar->AddPlugin(std::move(plugin));
 }
 
-FlutterEapPlugin::FlutterEapPlugin() = default;
+FlutterEapPlugin::FlutterEapPlugin() { ++instance_count_; }
 
 FlutterEapPlugin::~FlutterEapPlugin() {
-  // Clear Dart callbacks before the Dart VM tears down NativeCallables.
-  // Without this the C background thread can call a closed NativeCallable
-  // and trigger DLRT_GetFfiCallbackMetadata -> abort().
-  eap_client* client = flutter_eap_get_instance();
-  if (client) {
-    flutter_eap_clear_callbacks(client);
+  // Each engine holds its own subscriber in the native fan-out table and
+  // removes it in Dart (EapClientFfi.destroy). Clearing ALL callbacks here
+  // would wipe the OTHER engines' subscriptions, so the safety net (an engine
+  // dying without its Dart destroy must not leave the C background thread
+  // calling a closed NativeCallable - DLRT_GetFfiCallbackMetadata -> abort())
+  // only fires when the LAST engine's plugin instance is destroyed.
+  if (--instance_count_ <= 0) {
+    eap_client* client = flutter_eap_get_instance();
+    if (client) {
+      flutter_eap_clear_callbacks(client);
+    }
   }
 }
 

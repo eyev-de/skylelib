@@ -26,6 +26,10 @@ class FlutterEapPlugin : public flutter::Plugin {
   static bool ConfigureTransport();
 
   static bool is_transport_configured_;
+  // Live plugin-instance (engine) count: the native callback table holds one
+  // subscriber per engine (multi-engine fan-out), so the destructor's
+  // clear-all safety net only fires when the LAST engine goes away.
+  static int instance_count_;
 };
 
 }  // namespace flutter_eap

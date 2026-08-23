@@ -1,4 +1,5 @@
 /// Control state and settings of the device
+library;
 
 /// Tracking mode
 enum TrackingMode {

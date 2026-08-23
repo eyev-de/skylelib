@@ -39,6 +39,10 @@ typedef DartStateCallback = Void Function(Int32 state, Pointer<Void> userData);
 
 typedef DartErrorCallback = Void Function(Pointer<Utf8> errorMessage, Pointer<Void> userData);
 
+// Skyle Link: suspension state changed. `holder` is a heap-allocated copy
+// (or nullptr when not suspended) that Dart must free with flutter_eap_free.
+typedef DartSuspendStateCallback = Void Function(Bool suspended, Pointer<Utf8> holder, Pointer<Void> userData);
+
 // =============================================================================
 // Callbacks Structure (matches flutter_eap_callbacks from C)
 // =============================================================================
@@ -58,6 +62,14 @@ final class FlutterEapCallbacks extends Struct {
   external Pointer<NativeFunction<DartStateCallback>> onStateChange;
   external Pointer<NativeFunction<DartErrorCallback>> onError;
   external Pointer<Void> userData;
+
+  // Appended fields ONLY below this line: the layout above is ABI shared with
+  // the native flutter_eap_callbacks struct (single source of truth:
+  // native/fanout/flutter_eap_fanout.h; the darwin header keeps a
+  // field-identical iOS copy) - field order must stay identical.
+  // onSuspendState is dispatched by the subscriber fan-out on all pull-mode
+  // platforms; it never fires on iOS (no Skyle Link supervisor there).
+  external Pointer<NativeFunction<DartSuspendStateCallback>> onSuspendState;
 }
 
 // =============================================================================
@@ -77,10 +89,18 @@ typedef FlutterEapSetCallbacks = int Function(Pointer<EapClientNative> client, P
 typedef FlutterEapClearCallbacksNative = Void Function(Pointer<EapClientNative> client);
 typedef FlutterEapClearCallbacks = void Function(Pointer<EapClientNative> client);
 
-// Multi-engine callback fan-out (Android bridge only): each Flutter engine
-// registers its own subscriber and receives every callback independently.
+// Multi-engine callback fan-out (all pull-mode platforms: Android, macOS,
+// Windows; iOS stays single-slot push mode): each Flutter engine registers
+// its own subscriber and receives every callback independently.
 typedef FlutterEapAddCallbacksNative = Int64 Function(Pointer<EapClientNative> client, Pointer<FlutterEapCallbacks> callbacks);
 typedef FlutterEapAddCallbacks = int Function(Pointer<EapClientNative> client, Pointer<FlutterEapCallbacks> callbacks);
+
+// Desktop variant with an engine token (PlatformDispatcher.engineId): a
+// re-add with the same non-zero token atomically reaps the previous
+// subscriber carrying it - the hot-restart path where no host-side (Kotlin)
+// bookkeeping exists. Android keeps the plain add + reportSubscriberHandle.
+typedef FlutterEapAddCallbacksEngineNative = Int64 Function(Pointer<EapClientNative> client, Pointer<FlutterEapCallbacks> callbacks, Int64 engineToken);
+typedef FlutterEapAddCallbacksEngine = int Function(Pointer<EapClientNative> client, Pointer<FlutterEapCallbacks> callbacks, int engineToken);
 
 typedef FlutterEapRemoveCallbacksNative = Int32 Function(Pointer<EapClientNative> client, Int64 handle);
 typedef FlutterEapRemoveCallbacks = int Function(Pointer<EapClientNative> client, int handle);
@@ -140,6 +160,33 @@ typedef FlutterEapFreeNative = Void Function(Pointer<Void> ptr);
 typedef FlutterEapFree = void Function(Pointer<Void> ptr);
 
 // =============================================================================
+// Skyle Link (multi-app sharing) - exported by the shared link glue that is
+// compiled into every platform shim (flutter_eap_link_glue.c). All symbols
+// resolve from the SAME library the rest of the bindings use; they are
+// nullable because an older prebuilt shim may not export them yet.
+// =============================================================================
+
+typedef FlutterEapLinkGlueInstallNative = Void Function(Pointer<EapClientNative> client);
+typedef FlutterEapLinkGlueInstall = void Function(Pointer<EapClientNative> client);
+
+typedef FlutterEapSetIdentityNative = Void Function(Pointer<Utf8> appId, Uint8 tier, Bool usbCapable);
+typedef FlutterEapSetIdentity = void Function(Pointer<Utf8> appId, int tier, bool usbCapable);
+
+typedef FlutterEapSetSupervisorEnabledNative = Void Function(Bool enabled);
+typedef FlutterEapSetSupervisorEnabled = void Function(bool enabled);
+
+// skyle_link_supervisor_mode: 0 disabled, 1 deciding, 2 owner, 3 client, 4 usb fallback.
+typedef FlutterEapGetSupervisorModeNative = Int32 Function();
+typedef FlutterEapGetSupervisorMode = int Function();
+
+typedef FlutterEapLinkSetSuspendedNative = Int32 Function(Pointer<EapClientNative> client, Bool suspended);
+typedef FlutterEapLinkSetSuspended = int Function(Pointer<EapClientNative> client, bool suspended);
+
+typedef FlutterEapGetSuspensionStateNative = Void Function(Pointer<Bool> suspended, Pointer<Utf8> holderBuf, Size bufLen);
+typedef FlutterEapGetSuspensionState = void Function(Pointer<Bool> suspended, Pointer<Utf8> holderBuf, int bufLen);
+
+
+// =============================================================================
 // Bindings Class
 // =============================================================================
 
@@ -172,11 +219,21 @@ class EapClientBindings {
   late final FlutterEapGetState getState;
   late final FlutterEapGetLastError getLastError;
 
-  /// Multi-engine callback fan-out. Only the Android bridge exports these
-  /// symbols; null on the other platforms (which stay single-subscriber).
+  /// Multi-engine callback fan-out (all pull-mode platform bridges export
+  /// these; null on iOS and against older single-slot desktop binaries).
   late final FlutterEapAddCallbacks? addCallbacks;
+  late final FlutterEapAddCallbacksEngine? addCallbacksEngine;
   late final FlutterEapRemoveCallbacks? removeCallbacks;
   late final FlutterEapFree? nativeFree;
+
+  /// Skyle Link symbols (shared link glue, all platforms). Null when the
+  /// loaded shim predates Skyle Link support.
+  late final FlutterEapLinkGlueInstall? linkGlueInstall;
+  late final FlutterEapSetIdentity? setLinkIdentity;
+  late final FlutterEapSetSupervisorEnabled? setSupervisorEnabled;
+  late final FlutterEapGetSupervisorMode? getSupervisorMode;
+  late final FlutterEapLinkSetSuspended? linkSetSuspended;
+  late final FlutterEapGetSuspensionState? getSuspensionState;
 
   /// Native function pointer for flutter_eap_free, suitable for
   /// [NativeFinalizer] / [Pointer.asTypedList] finalizer parameter.
@@ -241,13 +298,41 @@ class EapClientBindings {
       nativeFreeFinalizer = null;
     }
 
-    // Multi-engine fan-out symbols exist only in the Android bridge.
+    // Multi-engine fan-out symbols (all pull-mode platform bridges; absent on
+    // iOS and in older single-slot desktop binaries).
     try {
       addCallbacks = _dylib.lookup<NativeFunction<FlutterEapAddCallbacksNative>>('flutter_eap_add_callbacks').asFunction();
       removeCallbacks = _dylib.lookup<NativeFunction<FlutterEapRemoveCallbacksNative>>('flutter_eap_remove_callbacks').asFunction();
     } catch (_) {
       addCallbacks = null;
       removeCallbacks = null;
+    }
+
+    // Engine-token add (separate try block: an intermediate Android binary
+    // exports the plain add but predates the engine variant).
+    try {
+      addCallbacksEngine = _dylib.lookup<NativeFunction<FlutterEapAddCallbacksEngineNative>>('flutter_eap_add_callbacks_engine').asFunction();
+    } catch (_) {
+      addCallbacksEngine = null;
+    }
+
+    // Skyle Link glue symbols - ship in every current platform shim, but stay
+    // nullable so the Dart layer degrades gracefully against an older binary
+    // (all Skyle Link features then report unavailable instead of crashing).
+    try {
+      linkGlueInstall = _dylib.lookup<NativeFunction<FlutterEapLinkGlueInstallNative>>('flutter_eap_link_glue_install').asFunction();
+      setLinkIdentity = _dylib.lookup<NativeFunction<FlutterEapSetIdentityNative>>('flutter_eap_set_identity').asFunction();
+      setSupervisorEnabled = _dylib.lookup<NativeFunction<FlutterEapSetSupervisorEnabledNative>>('flutter_eap_set_supervisor_enabled').asFunction();
+      getSupervisorMode = _dylib.lookup<NativeFunction<FlutterEapGetSupervisorModeNative>>('flutter_eap_get_supervisor_mode').asFunction();
+      linkSetSuspended = _dylib.lookup<NativeFunction<FlutterEapLinkSetSuspendedNative>>('flutter_eap_link_set_suspended').asFunction();
+      getSuspensionState = _dylib.lookup<NativeFunction<FlutterEapGetSuspensionStateNative>>('flutter_eap_get_suspension_state').asFunction();
+    } catch (_) {
+      linkGlueInstall = null;
+      setLinkIdentity = null;
+      setSupervisorEnabled = null;
+      getSupervisorMode = null;
+      linkSetSuspended = null;
+      getSuspensionState = null;
     }
   }
 }

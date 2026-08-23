@@ -84,9 +84,11 @@ add_library(${PLUGIN_NAME} SHARED
   "flutter_eap_plugin.cpp"
   "flutter_eap_plugin.h"
   "flutter_eap_bridge_windows.c"
+  "../native/link/flutter_eap_link_glue.c"    # Skyle Link glue (shared, all platforms)
+  "../native/fanout/flutter_eap_fanout.c"     # Multi-engine callback fan-out (shared, pull-mode platforms)
 )
 
-set_source_files_properties("flutter_eap_bridge_windows.c" PROPERTIES LANGUAGE C)
+set_source_files_properties("flutter_eap_bridge_windows.c" "../native/link/flutter_eap_link_glue.c" "../native/fanout/flutter_eap_fanout.c" PROPERTIES LANGUAGE C)
 target_compile_features(${PLUGIN_NAME} PRIVATE cxx_std_17)
 set_property(TARGET ${PLUGIN_NAME} PROPERTY C_STANDARD 17)
 set_property(TARGET ${PLUGIN_NAME} PROPERTY C_STANDARD_REQUIRED ON)

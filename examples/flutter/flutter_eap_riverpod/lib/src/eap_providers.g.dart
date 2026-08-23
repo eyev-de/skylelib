@@ -531,12 +531,18 @@ final class EapVideoProvider
 
 String _$eapVideoHash() => r'89ac5273094072b13c83ba9558a2f417ded373bf';
 
-/// Stream provider for connection state
+/// Stream provider for connection state.
+/// Seeded with the current native state: after an in-process engine recreation
+/// (hot restart, activity relaunch) the native client may already be
+/// LINK_SYNCED and the stream alone would never emit for this engine.
 
 @ProviderFor(eapConnectionStateStream)
 final eapConnectionStateStreamProvider = EapConnectionStateStreamProvider._();
 
-/// Stream provider for connection state
+/// Stream provider for connection state.
+/// Seeded with the current native state: after an in-process engine recreation
+/// (hot restart, activity relaunch) the native client may already be
+/// LINK_SYNCED and the stream alone would never emit for this engine.
 
 final class EapConnectionStateStreamProvider
     extends
@@ -546,7 +552,10 @@ final class EapConnectionStateStreamProvider
           Stream<ConnectionState>
         >
     with $FutureModifier<ConnectionState>, $StreamProvider<ConnectionState> {
-  /// Stream provider for connection state
+  /// Stream provider for connection state.
+  /// Seeded with the current native state: after an in-process engine recreation
+  /// (hot restart, activity relaunch) the native client may already be
+  /// LINK_SYNCED and the stream alone would never emit for this engine.
   EapConnectionStateStreamProvider._()
     : super(
         from: null,
@@ -574,7 +583,62 @@ final class EapConnectionStateStreamProvider
 }
 
 String _$eapConnectionStateStreamHash() =>
-    r'945b9fb5f62a3095c37b8ec7fad7bfde1e007c4b';
+    r'3bc48237eb3771c3a9f71da946fbf025334e5b3f';
+
+/// Stream provider for the Skyle Link eye-control suspension state.
+/// Seeded with the current native cached state (a suspension may already be
+/// active when this engine subscribes), then follows every change broadcast
+/// by the hub / local link.
+
+@ProviderFor(eapSuspension)
+final eapSuspensionProvider = EapSuspensionProvider._();
+
+/// Stream provider for the Skyle Link eye-control suspension state.
+/// Seeded with the current native cached state (a suspension may already be
+/// active when this engine subscribes), then follows every change broadcast
+/// by the hub / local link.
+
+final class EapSuspensionProvider
+    extends
+        $FunctionalProvider<
+          AsyncValue<SkyleLinkSuspendState>,
+          SkyleLinkSuspendState,
+          Stream<SkyleLinkSuspendState>
+        >
+    with
+        $FutureModifier<SkyleLinkSuspendState>,
+        $StreamProvider<SkyleLinkSuspendState> {
+  /// Stream provider for the Skyle Link eye-control suspension state.
+  /// Seeded with the current native cached state (a suspension may already be
+  /// active when this engine subscribes), then follows every change broadcast
+  /// by the hub / local link.
+  EapSuspensionProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'eapSuspensionProvider',
+        isAutoDispose: false,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$eapSuspensionHash();
+
+  @$internal
+  @override
+  $StreamProviderElement<SkyleLinkSuspendState> $createElement(
+    $ProviderPointer pointer,
+  ) => $StreamProviderElement(pointer);
+
+  @override
+  Stream<SkyleLinkSuspendState> create(Ref ref) {
+    return eapSuspension(ref);
+  }
+}
+
+String _$eapSuspensionHash() => r'ffecd18f47900b2c44593eb6189e15d2b4e5e8e2';
 
 /// Current connection state (from stream)
 

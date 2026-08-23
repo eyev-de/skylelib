@@ -1,3 +1,5 @@
+import Foundation
+
 class OutputStreamManager: NSObject, StreamDelegate {
   private let writeQueue = DispatchQueue(label: "de.eyev.writequeue")
   private var writeBuffer: [Data] = []

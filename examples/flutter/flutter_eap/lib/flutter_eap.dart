@@ -21,7 +21,7 @@
 ///
 /// await client.enableGaze(true);
 /// ```
-library flutter_eap;
+library;
 
 // Main client API
 export 'src/eap_client.dart';

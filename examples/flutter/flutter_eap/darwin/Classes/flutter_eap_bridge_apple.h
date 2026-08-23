@@ -15,7 +15,7 @@
 #include <TargetConditionals.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <eap_client.h>
+#include <skylelib/eap_client.h>
 
 // Keep symbols reachable from Dart FFI: the linker only sees the 5 functions
 // referenced from Swift, so -dead_strip removes the rest in Release. The
@@ -31,9 +31,20 @@
 extern "C" {
 #endif
 
+#if TARGET_OS_OSX
 // =============================================================================
-// Dart FFI Callback Function Pointer Types
-// Same as Android bridge - passing complete C structs by value
+// macOS: shared multi-engine subscriber fan-out (all pull-mode platforms).
+// The callback typedefs, the flutter_eap_callbacks struct, and the
+// add/remove export contracts come from the shared module header (single
+// source of truth for the Dart-shared ABI); this bridge defines the exported
+// wrappers. iOS below keeps its own field-identical single-slot copy.
+// =============================================================================
+#include "../../native/fanout/flutter_eap_fanout.h"
+#else
+
+// =============================================================================
+// Dart FFI Callback Function Pointer Types (iOS single-slot push mode)
+// Same layout as the shared fan-out module - passing complete C structs by value
 // =============================================================================
 
 typedef void (*dart_gaze_callback)(
@@ -116,6 +127,18 @@ typedef void (*dart_logging_callback)(
     void* user_data
 );
 
+/**
+ * Skyle Link suspension state callback. Present for ABI parity with the Dart
+ * FlutterEapCallbacks struct; on iOS the Skyle Link supervisor never runs, so
+ * suspension events are never delivered - the field exists only so the struct
+ * layout matches the fan-out platforms.
+ */
+typedef void (*dart_suspend_state_callback)(
+    bool suspended,
+    const char* holder_app_id,
+    void* user_data
+);
+
 // =============================================================================
 // Callback Registration Structure
 // =============================================================================
@@ -135,7 +158,13 @@ typedef struct {
     dart_state_callback on_state_change;
     dart_error_callback on_error;
     void* user_data;
+    // Appended fields ONLY below this line: the layout above is ABI shared
+    // with Dart (FlutterEapCallbacks) and the fan-out module - all
+    // definitions must stay field-identical. Unused on iOS (see typedef).
+    dart_suspend_state_callback on_suspend_state;
 } flutter_eap_callbacks;
+
+#endif // !TARGET_OS_OSX
 
 // =============================================================================
 // Public API Functions (same symbols as Android bridge for Dart FFI)
@@ -245,6 +274,13 @@ EAP_EXPORT void flutter_eap_set_apple_transport(
 /**
  * Configure IOKit USB transport for macOS (convenience function)
  * Creates an IOKit transport and sets it on the client.
+ *
+ * The first successful call also registers the Skyle Link USB ownership
+ * callback (skyle_link_set_usb_ownership_callback): during supervisor
+ * handovers the bridge destroys the IOKit transport on release (closing the
+ * OS device claim so another app can take the tracker) and recreates it with
+ * the same VID/PID on reacquire. macOS only - iOS uses push mode without a
+ * supervisor.
  *
  * @param client Client pointer from flutter_eap_get_instance()
  * @param vendor_id USB vendor ID (e.g., 0x3729)

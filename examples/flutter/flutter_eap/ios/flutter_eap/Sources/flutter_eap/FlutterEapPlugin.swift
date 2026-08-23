@@ -3,6 +3,13 @@ import Flutter
 import Foundation
 import UIKit
 
+// Swift Package Manager builds the C FFI bridge as its own module; under
+// CocoaPods the same declarations arrive through the pod umbrella header
+// (flutter_eap_ios.h), where this module does not exist.
+#if canImport(flutter_eap_bridge)
+import flutter_eap_bridge
+#endif
+
 public class FlutterEapPlugin: NSObject, FlutterPlugin, StreamDelegate, EAAccessoryDelegate {
     private var accessory: EAAccessory?
     private var session: EASession?

@@ -3,6 +3,7 @@ library;
 
 import 'dart:async';
 import 'dart:ffi';
+import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
@@ -189,6 +190,19 @@ class EapClient implements EapControl, EapGaze, EapPositioning, EapVideo, EapVer
   @override
   Stream<EapLogMessage> get deviceLogStream => _ffi.deviceLogStream;
 
+  /// Skyle Link eye-control suspension changes (broadcast). Emits whenever a
+  /// client takes or releases the suspension lease (or its connection dies).
+  /// Sources per mode: hub owner - the hub's SUSPEND_CHANGED events;
+  /// local-link client - the skyle_link suspend callback. On every fan-out
+  /// platform (Android, macOS, Windows, Linux) the native layer fans both out
+  /// to each engine's subscriber slot. Seed new listeners from
+  /// [currentSuspensionState]; this stream only carries changes.
+  Stream<SkyleLinkSuspendState> get suspensionStream => _ffi.suspensionStream;
+
+  /// Current Skyle Link suspension state, read from the native cached state.
+  /// Not suspended when Skyle Link is unused or unsupported.
+  SkyleLinkSuspendState get currentSuspensionState => _ffi.currentSuspensionState;
+
   void _log(LogLevel level, String message) {
     _ffi.emitLog(level, 'EapClient', message);
   }
@@ -197,8 +211,30 @@ class EapClient implements EapControl, EapGaze, EapPositioning, EapVideo, EapVer
   // Lifecycle
   // ==========================================================================
 
-  /// Initialize the client (call once at app startup)
-  void initialize() {
+  /// Skyle Link identity used when [initialize] is called without an explicit
+  /// `identity` (e.g. by the flutter_eap_riverpod providers). Set it BEFORE
+  /// the first initialize - typically early in main(). Only consulted on
+  /// desktop (see [initialize]); null means the native defaults apply
+  /// (third-party app id, default tier).
+  static SkyleLinkIdentity? defaultIdentity;
+
+  /// Initialize the client (call once at app startup).
+  ///
+  /// Transport selection (direct USB vs Skyle Link socket) is fully automatic:
+  /// the native supervisor elects the hub owner among local apps, dials as a
+  /// client otherwise, and swaps a running session live on handovers - the
+  /// application only observes a DISCONNECTED -> LINK_SYNCED blip.
+  ///
+  /// [identity] is this app's Skyle Link identity (HELLO app id + priority
+  /// tier). Resolution order: an explicit [identity] wins, else
+  /// [defaultIdentity], else null (native defaults - third-party app id,
+  /// default tier). Platform behavior:
+  /// - Desktop (macOS/Windows/Linux): the resolved identity is published and
+  ///   the supervisor is enabled.
+  /// - Android: ignored - the Kotlin layer owns identity and supervisor
+  ///   (EapUsbHost publishes skylex; SDK apps use manifest meta-data).
+  /// - iOS: ignored - the supervisor is disabled there.
+  void initialize({SkyleLinkIdentity? identity}) {
     if (_initialized) {
       return;
     }
@@ -208,6 +244,17 @@ class EapClient implements EapControl, EapGaze, EapPositioning, EapVideo, EapVer
 
     // Create native client
     _ffi.create();
+
+    // Skyle Link automatic transport supervisor (desktop only - Android's
+    // platform layer owns it, and a late Dart set_identity would clobber the
+    // service-published skylex identity; iOS runs without a supervisor).
+    // Runs once per engine under the subscriber fan-out: enable is idempotent,
+    // and a sub-window engine initializing with a null identity skips
+    // set_identity entirely, so it can never clobber the identity published
+    // by the engine that supplied one.
+    if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
+      _ffi.configureLinkSupervisor(identity ?? defaultIdentity);
+    }
 
     // Single ingest path for device control messages. Updates the cached
     // `_controlData`, marks the link as having received state, flushes any
@@ -274,7 +321,11 @@ class EapClient implements EapControl, EapGaze, EapPositioning, EapVideo, EapVer
     if (!_initialized) return;
 
     try {
-      await disconnect();
+      // Fan-out engines share the process-wide native client, so an engine's
+      // teardown must not stop the shared transport (destroy() below removes
+      // only this engine's subscriber). Android keeps the call for plugin-only
+      // runs; while the transport is host-owned the native layer no-ops it.
+      if (Platform.isAndroid || !_ffi.sharesNativeClient) await disconnect();
     } catch (_) {}
 
     await _stateSub?.cancel();
@@ -302,6 +353,14 @@ class EapClient implements EapControl, EapGaze, EapPositioning, EapVideo, EapVer
   /// Connect to the device and start background thread
   Future<void> connect() async {
     _checkInitialized();
+
+    // While the Skyle Link supervisor runs a local link (socket to another
+    // process's hub), the USB connect path would replace that transport.
+    if (_ffi.isLocalLink) {
+      _log(LogLevel.debug, 'connect() skipped - local Skyle Link transport is active');
+      return;
+    }
+
     _log(LogLevel.information, 'Starting connect...');
 
     _log(LogLevel.debug, 'Calling FFI connect...');
@@ -336,6 +395,41 @@ class EapClient implements EapControl, EapGaze, EapPositioning, EapVideo, EapVer
 
   /// True if connected (any state except disconnected/error)
   bool get isConnected => state.isConnected;
+
+  // ==========================================================================
+  // Skyle Link (multi-app sharing)
+  // ==========================================================================
+
+  /// Request ([suspended] = true) or release (false) the eye-control
+  /// suspension lease. Local-link client mode only: returns false and does
+  /// nothing when this process is the hub owner or not in local mode (the
+  /// hub-hosting app suspends by reacting to [suspensionStream], not by
+  /// leasing from itself). The result of the request arrives as a
+  /// SUSPEND_STATE broadcast on [suspensionStream].
+  Future<bool> setEyeControlSuspended(bool suspended) async {
+    if (!_initialized) {
+      return false;
+    }
+    if (_ffi.isHubOwner) {
+      _log(LogLevel.warning, 'setEyeControlSuspended ignored - this process is the hub owner');
+      return false;
+    }
+    if (!_ffi.isLocalLink) {
+      _log(LogLevel.warning, 'setEyeControlSuspended ignored - not in local-link mode');
+      return false;
+    }
+    final result = _ffi.setLinkSuspended(suspended);
+    if (result != 0) {
+      _log(LogLevel.warning, 'setEyeControlSuspended($suspended) failed (code $result)');
+    }
+    return result == 0;
+  }
+
+  /// Stop the Android process-wide USB host (EapUsbHost.stop()): disables the
+  /// Skyle Link supervisor (BYE(handover) to hub clients), releases the USB
+  /// device, and clears native host ownership so another app can take over
+  /// the tracker. No-op on all other platforms.
+  static Future<void> stopUsbHost() => EapClientFfi.stopUsbHost();
 
   // ==========================================================================
   // Feature Control

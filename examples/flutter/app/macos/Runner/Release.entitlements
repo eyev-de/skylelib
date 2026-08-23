@@ -4,6 +4,13 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<!-- Skyle Link: network.client to dial the hub of another app (a sandboxed
+	     client without it gets every connect() denied by the sandbox - looks
+	     like connection refused), network.server to serve the hub as owner. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
 	<!-- Required for the sandboxed app to reach the Skyle over USB (IOKit). -->
 	<key>com.apple.security.device.usb</key>
 	<true/>
