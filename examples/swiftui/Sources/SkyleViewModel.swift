@@ -9,11 +9,11 @@ final class SkyleViewModel: ObservableObject {
     @Published var deviceInfo = ""
     @Published var gazeText = "Gaze: —"
     @Published var selection: ViewMode = .positioning
-    @Published var face: eap_complex_face?
+    @Published var face: skyle_complex_face?
     @Published var videoImage: CGImage?
 
     private let client = SkyleClient()
-    private var state: eap_connection_state = EAP_STATE_DISCONNECTED
+    private var state: skyle_connection_state = SKYLE_STATE_DISCONNECTED
 
     init() {
         client.onState = { [weak self] s in
@@ -45,24 +45,24 @@ final class SkyleViewModel: ObservableObject {
 
     /// Apply stream subscriptions for the current connection state + tab.
     func applyStreams() {
-        guard state == EAP_STATE_LINK_SYNCED else { return }
+        guard state == SKYLE_STATE_LINK_SYNCED else { return }
         client.enableGaze(true)                              // always live
         client.enablePositioning(selection == .positioning)
         client.enableVideo(selection == .video)              // off when hidden saves bandwidth
     }
 
-    private func handleState(_ s: eap_connection_state) {
+    private func handleState(_ s: skyle_connection_state) {
         state = s
         switch s {
-        case EAP_STATE_LINK_SYNCED:
+        case SKYLE_STATE_LINK_SYNCED:
             connectionLabel = "Streaming"
             connectionColor = Color(red: 0.18, green: 0.80, blue: 0.44)   // green
             applyStreams()
-        case EAP_STATE_DISCONNECTED:
+        case SKYLE_STATE_DISCONNECTED:
             connectionLabel = "Disconnected"
             connectionColor = .gray
             deviceInfo = ""
-        case EAP_STATE_ERROR:
+        case SKYLE_STATE_ERROR:
             connectionLabel = "Error"
             connectionColor = Color(red: 0.91, green: 0.30, blue: 0.24)   // red
         default:

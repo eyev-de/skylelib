@@ -2,7 +2,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_eap_riverpod/flutter_eap_riverpod.dart';
+import 'package:flutter_skyle_riverpod/flutter_skyle_riverpod.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// Shows the device video stream. Each frame (1=grayscale, 3=BGR, 4=BGRA) is
@@ -74,7 +74,7 @@ class _VideoViewState extends ConsumerState<VideoView> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(eapVideoDataStreamProvider, (_, next) {
+    ref.listen(skyleVideoDataStreamProvider, (_, next) {
       final frame = next.value;
       if (frame != null) _onFrame(frame);
     });

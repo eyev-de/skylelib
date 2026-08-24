@@ -22,7 +22,7 @@ SOFTWARE.
 
 ---
 
-Note: this license covers the example applications and the flutter_eap
+Note: this license covers the example applications and the flutter_skyle
 plugin source code in this repository ONLY. The skylelib SDK itself
 (the prebuilt binaries and headers distributed as release assets and
 consumed by these examples) is proprietary software of eyeV GmbH and is

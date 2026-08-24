@@ -9,10 +9,10 @@ internal sealed class GazeSnapshot
 {
     public float X { get; }
     public float Y { get; }
-    public EapEyeMovementType Movement { get; }
+    public SkyleEyeMovementType Movement { get; }
     public bool Valid { get; }
 
-    public GazeSnapshot(float x, float y, EapEyeMovementType movement, bool valid)
+    public GazeSnapshot(float x, float y, SkyleEyeMovementType movement, bool valid)
     {
         X = x; Y = y; Movement = movement; Valid = valid;
     }
@@ -21,8 +21,8 @@ internal sealed class GazeSnapshot
 /// <summary>One positioning frame (full face structure) for the diagnostic view.</summary>
 internal sealed class PositioningSnapshot
 {
-    public EapComplexFace Face { get; }
-    public PositioningSnapshot(EapComplexFace face) => Face = face;
+    public SkyleComplexFace Face { get; }
+    public PositioningSnapshot(SkyleComplexFace face) => Face = face;
 }
 
 /// <summary>One decoded video frame; pixels copied out of the transient native buffer.</summary>
@@ -75,20 +75,20 @@ internal sealed class SkyleClient : IDisposable
     public event Action<GazeSnapshot>? GazeReceived;
     public event Action<PositioningSnapshot>? PositioningReceived;
     public event Action<VideoFrame>? VideoReceived;
-    public event Action<EapConnectionState>? StateChanged;
+    public event Action<SkyleConnectionState>? StateChanged;
     public event Action<string>? VersionReceived;
 
     public void Start()
     {
         VerifyStructLayouts();
 
-        _client = NativeMethods.eap_client_get_instance();
+        _client = NativeMethods.skyle_client_get_instance();
         if (_client == IntPtr.Zero)
-            throw new InvalidOperationException("eap_client_get_instance() returned NULL.");
+            throw new InvalidOperationException("skyle_client_get_instance() returned NULL.");
 
         SetupTransport();   // phase 1: transport (starts background I/O thread)
         SetupCallbacks();   // phase 2: message callbacks
-        NativeMethods.eap_client_connect(_client);
+        NativeMethods.skyle_client_connect(_client);
     }
 
     private void SetupTransport()
@@ -97,31 +97,31 @@ internal sealed class SkyleClient : IDisposable
 
         if (OperatingSystem.IsMacOS())
         {
-            var cfg = new EapTransportIokitConfig
+            var cfg = new SkyleTransportIokitConfig
             {
                 VendorId = SkyleVendorId,
                 ProductId = SkyleProductId,
                 TimeoutMs = 1000,
                 Verbose = false,
             };
-            _transport = NativeMethods.eap_transport_iokit_create(ref cfg);
-            writePtr = NativeLibrary.GetExport(NativeMethods.LibraryHandle, "eap_transport_iokit_write");
-            readPtr = NativeLibrary.GetExport(NativeMethods.LibraryHandle, "eap_transport_iokit_read");
-            checkPtr = NativeMethods.eap_transport_iokit_get_check_callback();
+            _transport = NativeMethods.skyle_transport_iokit_create(ref cfg);
+            writePtr = NativeLibrary.GetExport(NativeMethods.LibraryHandle, "skyle_transport_iokit_write");
+            readPtr = NativeLibrary.GetExport(NativeMethods.LibraryHandle, "skyle_transport_iokit_read");
+            checkPtr = NativeMethods.skyle_transport_iokit_get_check_callback();
         }
         else if (OperatingSystem.IsWindows())
         {
-            var cfg = new EapTransportUsbConfig
+            var cfg = new SkyleTransportUsbConfig
             {
                 VendorId = SkyleVendorId,
                 ProductId = SkyleProductId,
                 TimeoutMs = 1000,
                 Verbose = false,
             };
-            _transport = NativeMethods.eap_transport_usb_create(ref cfg);
-            writePtr = NativeLibrary.GetExport(NativeMethods.LibraryHandle, "eap_transport_usb_write");
-            readPtr = NativeLibrary.GetExport(NativeMethods.LibraryHandle, "eap_transport_usb_read");
-            checkPtr = NativeMethods.eap_transport_usb_get_check_callback();
+            _transport = NativeMethods.skyle_transport_usb_create(ref cfg);
+            writePtr = NativeLibrary.GetExport(NativeMethods.LibraryHandle, "skyle_transport_usb_write");
+            readPtr = NativeLibrary.GetExport(NativeMethods.LibraryHandle, "skyle_transport_usb_read");
+            checkPtr = NativeMethods.skyle_transport_usb_get_check_callback();
         }
         else
         {
@@ -129,7 +129,7 @@ internal sealed class SkyleClient : IDisposable
                 "This example provides a built-in USB transport only for macOS and Windows.");
         }
 
-        var transport = new EapTransportConfig
+        var transport = new SkyleTransportConfig
         {
             TransportWrite = writePtr,
             TransportRead = readPtr,
@@ -140,7 +140,7 @@ internal sealed class SkyleClient : IDisposable
             Verbose = false,
             Trace = false,
         };
-        NativeMethods.eap_client_set_transport(_client, ref transport);
+        NativeMethods.skyle_client_set_transport(_client, ref transport);
     }
 
     private void SetupCallbacks()
@@ -151,7 +151,7 @@ internal sealed class SkyleClient : IDisposable
         _stateCb = OnState;
         _versionCb = OnVersion;
 
-        var callbacks = new EapCallbackConfig
+        var callbacks = new SkyleCallbackConfig
         {
             OnGaze = Marshal.GetFunctionPointerForDelegate(_gazeCb),
             OnPositioning = Marshal.GetFunctionPointerForDelegate(_posCb),
@@ -160,14 +160,14 @@ internal sealed class SkyleClient : IDisposable
             OnVersion = Marshal.GetFunctionPointerForDelegate(_versionCb),
             UserData = IntPtr.Zero,
         };
-        NativeMethods.eap_client_set_callbacks(_client, ref callbacks);
+        NativeMethods.skyle_client_set_callbacks(_client, ref callbacks);
     }
 
     // ---- streaming control (safe to call from any thread) ----
 
-    public void EnableGaze(bool enable) => SafeCall(() => NativeMethods.eap_client_enable_gaze(_client, enable));
-    public void EnablePositioning(bool enable) => SafeCall(() => NativeMethods.eap_client_enable_positioning(_client, enable));
-    public void EnableVideo(bool enable) => SafeCall(() => NativeMethods.eap_client_enable_video(_client, enable));
+    public void EnableGaze(bool enable) => SafeCall(() => NativeMethods.skyle_client_enable_gaze(_client, enable));
+    public void EnablePositioning(bool enable) => SafeCall(() => NativeMethods.skyle_client_enable_positioning(_client, enable));
+    public void EnableVideo(bool enable) => SafeCall(() => NativeMethods.skyle_client_enable_video(_client, enable));
 
     private void SafeCall(Func<int> action)
     {
@@ -179,21 +179,21 @@ internal sealed class SkyleClient : IDisposable
 
     private void OnGaze(IntPtr client, IntPtr gaze, IntPtr user)
     {
-        var r = Marshal.PtrToStructure<EapGazeResponse>(gaze);
+        var r = Marshal.PtrToStructure<SkyleGazeResponse>(gaze);
         var both = r.Both;
         bool valid = both.Smoothed.X != 0f || both.Smoothed.Y != 0f;
-        GazeReceived?.Invoke(new GazeSnapshot(both.Smoothed.X, both.Smoothed.Y, (EapEyeMovementType)both.Type, valid));
+        GazeReceived?.Invoke(new GazeSnapshot(both.Smoothed.X, both.Smoothed.Y, (SkyleEyeMovementType)both.Type, valid));
     }
 
     private void OnPositioning(IntPtr client, IntPtr positioning, IntPtr user)
     {
-        var r = Marshal.PtrToStructure<EapPositioningResponse>(positioning);
+        var r = Marshal.PtrToStructure<SkylePositioningResponse>(positioning);
         PositioningReceived?.Invoke(new PositioningSnapshot(r.Face));
     }
 
     private void OnVideo(IntPtr client, IntPtr video, IntPtr user)
     {
-        var r = Marshal.PtrToStructure<EapVideoResponse>(video);
+        var r = Marshal.PtrToStructure<SkyleVideoResponse>(video);
         int len = (int)r.PixelDataLength;
         var buffer = new byte[len];
         if (r.PixelData != IntPtr.Zero && len > 0)
@@ -202,11 +202,11 @@ internal sealed class SkyleClient : IDisposable
     }
 
     private void OnState(IntPtr client, int oldState, int newState, IntPtr user)
-        => StateChanged?.Invoke((EapConnectionState)newState);
+        => StateChanged?.Invoke((SkyleConnectionState)newState);
 
     private void OnVersion(IntPtr client, IntPtr version, IntPtr user)
     {
-        var r = Marshal.PtrToStructure<EapVersionResponse>(version);
+        var r = Marshal.PtrToStructure<SkyleVersionResponse>(version);
         string fw = CString(r.Firmware);
         VersionReceived?.Invoke(string.IsNullOrEmpty(fw)
             ? $"Skyle · SN {r.Serial}"
@@ -224,15 +224,15 @@ internal sealed class SkyleClient : IDisposable
     /// <summary>Cheap guard against alignment drift between C and the C# mirrors.</summary>
     private static void VerifyStructLayouts()
     {
-        Check<EapPointF>(8);
-        Check<EapRectF>(16);
-        Check<EapRectU>(8);
-        Check<EapRotatedRect>(20);
-        Check<EapComplexFeature>(44);
-        Check<EapComplexIris>(44);
-        Check<EapComplexEye>(184);
-        Check<EapComplexEyes>(368);
-        Check<EapComplexFace>(384);
+        Check<SkylePointF>(8);
+        Check<SkyleRectF>(16);
+        Check<SkyleRectU>(8);
+        Check<SkyleRotatedRect>(20);
+        Check<SkyleComplexFeature>(44);
+        Check<SkyleComplexIris>(44);
+        Check<SkyleComplexEye>(184);
+        Check<SkyleComplexEyes>(368);
+        Check<SkyleComplexFace>(384);
 
         static void Check<T>(int expected)
         {
@@ -250,16 +250,16 @@ internal sealed class SkyleClient : IDisposable
 
         if (_client != IntPtr.Zero)
         {
-            try { NativeMethods.eap_client_disconnect(_client); } catch { /* ignore */ }
-            try { NativeMethods.eap_client_stop_background(_client); } catch { /* ignore */ }
+            try { NativeMethods.skyle_client_disconnect(_client); } catch { /* ignore */ }
+            try { NativeMethods.skyle_client_stop_background(_client); } catch { /* ignore */ }
         }
 
         if (_transport != IntPtr.Zero)
         {
             try
             {
-                if (OperatingSystem.IsMacOS()) NativeMethods.eap_transport_iokit_destroy(_transport);
-                else if (OperatingSystem.IsWindows()) NativeMethods.eap_transport_usb_destroy(_transport);
+                if (OperatingSystem.IsMacOS()) NativeMethods.skyle_transport_iokit_destroy(_transport);
+                else if (OperatingSystem.IsWindows()) NativeMethods.skyle_transport_usb_destroy(_transport);
             }
             catch { /* ignore */ }
             _transport = IntPtr.Zero;

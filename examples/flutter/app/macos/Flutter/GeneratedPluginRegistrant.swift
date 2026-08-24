@@ -5,8 +5,8 @@
 import FlutterMacOS
 import Foundation
 
-import flutter_eap
+import flutter_skyle
 
 func RegisterGeneratedPlugins(registry: FlutterPluginRegistry) {
-  FlutterEapPlugin.register(with: registry.registrar(forPlugin: "FlutterEapPlugin"))
+  FlutterSkylePlugin.register(with: registry.registrar(forPlugin: "FlutterSkylePlugin"))
 }

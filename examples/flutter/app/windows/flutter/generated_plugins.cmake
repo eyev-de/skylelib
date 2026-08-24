@@ -3,7 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  flutter_eap
+  flutter_skyle
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

@@ -1,7 +1,7 @@
 namespace SkyleAvaloniaExample.Interop;
 
-/// <summary>Mirror of <c>eap_connection_state</c> (eap_client.h).</summary>
-internal enum EapConnectionState
+/// <summary>Mirror of <c>skyle_connection_state</c> (skyle_client.h).</summary>
+internal enum SkyleConnectionState
 {
     Disconnected = 0,
     WaitingPing,
@@ -9,13 +9,13 @@ internal enum EapConnectionState
     WaitingSyn,
     SynAckSent,
     Connected,
-    WaitingStartEapAck,
+    WaitingStartAck,
     LinkSynced,
     Error,
 }
 
-/// <summary>Mirror of <c>eap_result</c> (eap_client.h).</summary>
-internal enum EapResult
+/// <summary>Mirror of <c>skyle_result</c> (skyle_client.h).</summary>
+internal enum SkyleResult
 {
     Ok = 0,
     NotFound = -1,
@@ -26,8 +26,8 @@ internal enum EapResult
     Memory = -6,
 }
 
-/// <summary>Mirror of <c>eap_eye_movement_type</c> (eap_types.h).</summary>
-internal enum EapEyeMovementType : byte
+/// <summary>Mirror of <c>skyle_eye_movement_type</c> (skyle_types.h).</summary>
+internal enum SkyleEyeMovementType : byte
 {
     Fixation = 0,
     Saccade = 1,

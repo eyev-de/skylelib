@@ -6,9 +6,9 @@
 
 #include "generated_plugin_registrant.h"
 
-#include <flutter_eap/flutter_eap_plugin_c_api.h>
+#include <flutter_skyle/flutter_skyle_plugin_c_api.h>
 
 void RegisterPlugins(flutter::PluginRegistry* registry) {
-  FlutterEapPluginCApiRegisterWithRegistrar(
-      registry->GetRegistrarForPlugin("FlutterEapPluginCApi"));
+  FlutterSkylePluginCApiRegisterWithRegistrar(
+      registry->GetRegistrarForPlugin("FlutterSkylePluginCApi"));
 }

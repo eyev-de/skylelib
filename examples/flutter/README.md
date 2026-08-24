@@ -1,6 +1,6 @@
 # Skyle Flutter Example (macOS · iPadOS · Android · Windows)
 
-A Flutter app that consumes the **skylelib** C library through the **`flutter_eap`**
+A Flutter app that consumes the **skylelib** C library through the **`flutter_skyle`**
 FFI plugin. It mirrors the Avalonia and SwiftUI examples: a segmented control
 toggling a **Positioning** view and a **Video** view, a **connection indicator**,
 and a live **gaze readout**.
@@ -12,16 +12,16 @@ release pipeline — it does **not** compile skylelib from source.
 
 ```
 examples/flutter/
-  flutter_eap/           # the vendored FFI plugin (Dart bindings + native bridge)
-  flutter_eap_riverpod/  # Riverpod providers on top of flutter_eap
+  flutter_skyle/           # the vendored FFI plugin (Dart bindings + native bridge)
+  flutter_skyle_riverpod/  # Riverpod providers on top of flutter_skyle
   app/                   # the example app (this is what you run)
 ```
 
-- `flutter_eap` is the binding: Dart FFI + a small C bridge, exposing the C
+- `flutter_skyle` is the binding: Dart FFI + a small C bridge, exposing the C
   callbacks as plain Dart streams. Its per-platform build files link the
   prebuilt skylelib (see "How native libs are pulled" below).
-- `flutter_eap_riverpod` wraps those streams as Riverpod providers; apps using
-  other state managers can depend on `flutter_eap` alone.
+- `flutter_skyle_riverpod` wraps those streams as Riverpod providers; apps using
+  other state managers can depend on `flutter_skyle` alone.
 - `app` depends on both via path dependencies and implements the UI.
 
 ## Prerequisites
@@ -36,7 +36,7 @@ examples/flutter/
 
 **You can skip this step entirely:** if no local SDK is found, each platform's
 build **downloads the GitHub release matching the plugin's version
-automatically** and caches it under `flutter_eap/.skylelib/<version>/`. The
+automatically** and caches it under `flutter_skyle/.skylelib/<version>/`. The
 resolution order everywhere is: `SKYLELIB_DIST` override → the repo's `dist/` →
 auto-download.
 
@@ -81,7 +81,7 @@ FFI + UI wiring is exercised without hardware.
 
 ## How native libs are pulled
 
-Every platform of `flutter_eap` resolves the **prebuilt** skylelib in the same
+Every platform of `flutter_skyle` resolves the **prebuilt** skylelib in the same
 order (first hit wins):
 
 1. **Explicit override** — `SKYLELIB_DIST` env var (Apple pods, Android), a
@@ -89,21 +89,21 @@ order (first hit wins):
 2. **The skylelib repo's `dist/`** — source-tree development (`build_sdk.sh`).
 3. **Auto-download** — fetch the [GitHub release](https://github.com/eyev-de/skylelib/releases)
    asset matching the plugin's pubspec version into
-   `flutter_eap/.skylelib/<version>/`. This is the path taken when the plugin
+   `flutter_skyle/.skylelib/<version>/`. This is the path taken when the plugin
    is consumed as a pub **git dependency** (see below).
 
 Where each platform links it:
 
-- **macOS / iOS** - the Swift packages (`macos/flutter_eap/Package.swift`,
-  `ios/flutter_eap/Package.swift`) link `skylelib.xcframework` as a
-  `binaryTarget`: the local copy at `<platform>/flutter_eap/.skylelib/` when
-  present (create it with `flutter_eap/scripts/vendor_xcframework.sh`, same
+- **macOS / iOS** - the Swift packages (`macos/flutter_skyle/Package.swift`,
+  `ios/flutter_skyle/Package.swift`) link `skylelib.xcframework` as a
+  `binaryTarget`: the local copy at `<platform>/flutter_skyle/.skylelib/` when
+  present (create it with `flutter_skyle/scripts/vendor_xcframework.sh`, same
   resolution order as above), otherwise the checksum-pinned release zip. SPM
   picks the slice per SDK, so the same manifest covers iOS device and simulator.
   Only the shared Apple bridge is compiled; skylelib comes from the slice's
   `libskylelib.a`. The example app builds this way on both platforms - it has no
   Podfile, so nothing runs the podspecs' vendoring for it. CocoaPods consumers
-  of the plugin still get `macos|ios/flutter_eap.podspec`, which compile the same
+  of the plugin still get `macos|ios/flutter_skyle.podspec`, which compile the same
   sources (shared resolution logic in `darwin/skylelib_prebuilt.rb`); see
   `docs/SDK_DISTRIBUTION.md` section 8.1.
 - **Android** — `android/build.gradle` resolves/downloads the SDK, adds its
@@ -113,17 +113,17 @@ Where each platform links it:
   (win-x64 or win-arm64 by generator platform), links `lib/skylelib.lib`, and
   bundles `bin/skylelib.dll` next to the app exe.
 
-## Using `flutter_eap` in your own app (pub git dependency)
+## Using `flutter_skyle` in your own app (pub git dependency)
 
 The plugin is consumable straight from this public repo — no source checkout of
 skylelib needed; the native builds download the matching prebuilt SDK:
 
 ```yaml
 dependencies:
-  flutter_eap:
+  flutter_skyle:
     git:
       url: https://github.com/eyev-de/skylelib.git
-      path: examples/flutter/flutter_eap
+      path: examples/flutter/flutter_skyle
       ref: v0.1.1   # pin a release tag; the plugin downloads the same version's binaries
 ```
 
@@ -134,12 +134,12 @@ The first build per platform needs network access to fetch the release asset
 
 ## How it works
 
-- `flutter_eap_riverpod` exposes the C client as Riverpod providers. The app
+- `flutter_skyle_riverpod` exposes the C client as Riverpod providers. The app
   wraps itself in a `ProviderScope` and watches:
-  - `eapConnectionStateStreamProvider` → connection badge
-  - `eapPositioningDataStreamProvider` → `PositioningView` (CustomPainter)
-  - `eapVideoDataStreamProvider` → `VideoView` (decoded to a `ui.Image`)
-  - `eapGazeDataStreamProvider` → gaze readout
+  - `skyleConnectionStateStreamProvider` → connection badge
+  - `skylePositioningDataStreamProvider` → `PositioningView` (CustomPainter)
+  - `skyleVideoDataStreamProvider` → `VideoView` (decoded to a `ui.Image`)
+  - `skyleGazeDataStreamProvider` → gaze readout
 - On `LINK_SYNCED` it enables the streams it needs (`enableGaze/Positioning/Video`),
   re-applying when the tab changes — gaze stays live in both tabs.
 - Coordinates: gaze is screen-space pixels (`gaze.combined.smoothed`); positioning

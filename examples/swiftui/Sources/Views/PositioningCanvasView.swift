@@ -6,7 +6,7 @@ struct PositioningCanvasView: View {
     static let sensorWidth: CGFloat = 2464
     static let sensorHeight: CGFloat = 2064
 
-    let face: eap_complex_face?
+    let face: skyle_complex_face?
 
     var body: some View {
         Canvas { context, size in
@@ -32,9 +32,9 @@ struct PositioningCanvasView: View {
                 CGPoint(x: ox + CGFloat(x) * scale, y: oy + CGFloat(y) * scale)
             }
 
-            func isZero(_ p: eap_pointf) -> Bool { p.x == 0 && p.y == 0 }
+            func isZero(_ p: skyle_pointf) -> Bool { p.x == 0 && p.y == 0 }
 
-            func drawEye(_ eye: eap_complex_eye) {
+            func drawEye(_ eye: skyle_complex_eye) {
                 // Eye bounding box (image-space uint16)
                 let b = eye.bounding_rect
                 if b.right > b.left && b.bottom > b.top {

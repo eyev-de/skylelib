@@ -11,7 +11,7 @@ itself is closed-source; this repository ships **runnable examples** plus the
 - **SwiftUI** (`examples/swiftui`) — a macOS + iPadOS app using a bridging
   header and the `skylelib.xcframework`.
 - **Flutter** (`examples/flutter`) — a macOS / iPadOS / Android / Windows app
-  using the `flutter_eap` FFI plugin.
+  using the `flutter_skyle` FFI plugin.
 
 Both show the same thing: connect to a Skyle, then stream live gaze,
 positioning and video.
@@ -19,7 +19,7 @@ positioning and video.
 📖 **API reference:** [Documentation.md](Documentation.md) — the full public C
 API (client lifecycle, transport, callbacks, message types and data structures).
 For the Dart binding, see
-[flutter_eap/Documentation.md](examples/flutter/flutter_eap/Documentation.md).
+[flutter_skyle/Documentation.md](examples/flutter/flutter_skyle/Documentation.md).
 
 ## 1. Get a binary
 
@@ -39,7 +39,7 @@ the native library **and** the public headers (`include/skylelib/…`).
 | iOS Simulator | 13 | arm64 + x86_64 | `skylelib-<version>-ios-sim.zip` | `lib/libskylelib.a`, `include/` | static |
 | **Apple (all)** | macOS 11 / iOS 13 | universal | `skylelib-<version>-xcframework.zip` | `skylelib.xcframework` (headers embedded) | static |
 
-> The library is **big-endian on the wire** and exposes an opaque `eap_client`
+> The library is **big-endian on the wire** and exposes an opaque `skyle_client`
 > handle — see [Documentation.md](Documentation.md) or the headers in any
 > release zip for the full C API.
 
@@ -105,29 +105,29 @@ flutter pub get
 flutter run -d macos          # verified; also -d <ios-device> / <android> / windows
 ```
 
-No manual download needed: the `flutter_eap` plugin **fetches the prebuilt
+No manual download needed: the `flutter_skyle` plugin **fetches the prebuilt
 skylelib release matching its version automatically** (cached under
-`flutter_eap/.skylelib/`). To provide it yourself, unzip a release and set
+`flutter_skyle/.skylelib/`). To provide it yourself, unzip a release and set
 `SKYLELIB_DIST` (Apple pods) / `-PSKYLELIB_DIST` (Android) / `-DSKYLELIB_DIST`
 (Windows CMake). With a Skyle attached the badge turns green and the
 positioning / video views come alive; with no device the app still launches
 (badge stays gray). See
 [examples/flutter/README.md](examples/flutter/README.md) for details.
 
-### Use `flutter_eap` in your own Flutter app
+### Use `flutter_skyle` in your own Flutter app
 
 ```yaml
 dependencies:
-  flutter_eap:
+  flutter_skyle:
     git:
       url: https://github.com/eyev-de/skylelib.git
-      path: examples/flutter/flutter_eap
+      path: examples/flutter/flutter_skyle
       ref: v1.0.0   # pin a release tag; binaries of the same version are fetched automatically
 ```
 
-Riverpod users can add `flutter_eap_riverpod` (same git url and ref, path
-`examples/flutter/flutter_eap_riverpod`) for ready-made providers wrapping the
-client's streams; it re-exports the full `flutter_eap` API.
+Riverpod users can add `flutter_skyle_riverpod` (same git url and ref, path
+`examples/flutter/flutter_skyle_riverpod`) for ready-made providers wrapping the
+client's streams; it re-exports the full `flutter_skyle` API.
 
 ## Notes
 
@@ -140,7 +140,7 @@ client's streams; it re-exports the full `flutter_eap` API.
 
 ## License
 
-- **Example apps + `flutter_eap` plugin** (everything in this repository):
+- **Example apps + `flutter_skyle` plugin** (everything in this repository):
   [MIT](LICENSE) — use them freely as a starting point for your own
   integration.
 - **skylelib SDK** (the prebuilt binaries + headers attached to

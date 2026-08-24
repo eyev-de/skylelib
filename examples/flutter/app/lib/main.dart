@@ -1,7 +1,7 @@
 // Flutter also defines a `ConnectionState` (for StreamBuilder); hide it so the
-// EAP one from flutter_eap is unambiguous.
+// one from flutter_skyle is unambiguous.
 import 'package:flutter/material.dart' hide ConnectionState;
-import 'package:flutter_eap_riverpod/flutter_eap_riverpod.dart';
+import 'package:flutter_skyle_riverpod/flutter_skyle_riverpod.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'positioning_view.dart';
@@ -42,7 +42,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   @override
   void initState() {
     super.initState();
-    // Start the EAP handshake once the first frame is up.
+    // Start the handshake once the first frame is up.
     WidgetsBinding.instance.addPostFrameCallback((_) => _connect());
   }
 
@@ -51,7 +51,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   /// land before "transport write" is set. Retrying a few times covers that
   /// without a manual Connect button.
   Future<void> _connect() async {
-    final client = ref.read(eapClientProvider);
+    final client = ref.read(skyleClientProvider);
     for (var attempt = 0; attempt < 10 && mounted; attempt++) {
       try {
         await client.connect();
@@ -64,8 +64,8 @@ class _HomePageState extends ConsumerState<HomePage> {
 
   /// Subscribe to the streams the UI needs. Only valid once LINK_SYNCED.
   void _applyStreams() {
-    if (!ref.read(eapConnectionStateProvider).isReady) return;
-    final client = ref.read(eapClientProvider);
+    if (!ref.read(skyleConnectionStateProvider).isReady) return;
+    final client = ref.read(skyleClientProvider);
     client.enableGaze(true); // gaze readout is always live
     client.enablePositioning(_mode == ViewMode.positioning);
     client.enableVideo(_mode == ViewMode.video); // off when hidden saves bandwidth
@@ -74,7 +74,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   @override
   Widget build(BuildContext context) {
     // Re-apply streams as soon as the link comes up.
-    ref.listen(eapConnectionStateProvider, (_, next) {
+    ref.listen(skyleConnectionStateProvider, (_, next) {
       if (next.isReady) _applyStreams();
     });
 
@@ -116,7 +116,7 @@ class _ConnectionBar extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(eapConnectionStateStreamProvider).value ??
+    final state = ref.watch(skyleConnectionStateStreamProvider).value ??
         ConnectionState.disconnected;
 
     late final Color color;
@@ -182,7 +182,7 @@ class _GazeReadout extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final gaze = ref.watch(eapGazeDataStreamProvider).value;
+    final gaze = ref.watch(skyleGazeDataStreamProvider).value;
     final String text;
     if (gaze == null || (gaze.gazeX == 0 && gaze.gazeY == 0)) {
       text = 'Gaze: —';

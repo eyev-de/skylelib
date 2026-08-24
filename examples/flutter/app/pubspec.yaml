@@ -36,13 +36,13 @@ dependencies:
   cupertino_icons: ^1.0.8
 
   # The vendored Skyle EAP plugin (FFI binding to the prebuilt skylelib).
-  flutter_eap:
-    path: ../flutter_eap
+  flutter_skyle:
+    path: ../flutter_skyle
 
   # Riverpod providers wrapping the plugin's streams (separate package so
-  # non-Riverpod apps can depend on flutter_eap alone).
-  flutter_eap_riverpod:
-    path: ../flutter_eap_riverpod
+  # non-Riverpod apps can depend on flutter_skyle alone).
+  flutter_skyle_riverpod:
+    path: ../flutter_skyle_riverpod
   flutter_riverpod: ^3.0.0
 
 dev_dependencies:

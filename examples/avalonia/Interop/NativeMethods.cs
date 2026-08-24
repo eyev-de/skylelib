@@ -64,28 +64,28 @@ internal static class NativeMethods
 
     // ---- Client lifecycle / streaming ----
 
-    [DllImport(Lib)] public static extern IntPtr eap_client_get_instance();
-    [DllImport(Lib)] public static extern int eap_client_set_transport(IntPtr client, ref EapTransportConfig cfg);
-    [DllImport(Lib)] public static extern int eap_client_set_callbacks(IntPtr client, ref EapCallbackConfig cfg);
-    [DllImport(Lib)] public static extern int eap_client_connect(IntPtr client);
-    [DllImport(Lib)] public static extern int eap_client_disconnect(IntPtr client);
-    [DllImport(Lib)] public static extern int eap_client_get_state(IntPtr client);
-    [DllImport(Lib)] public static extern int eap_client_stop_background(IntPtr client);
-    [DllImport(Lib)] public static extern int eap_client_request_version(IntPtr client);
+    [DllImport(Lib)] public static extern IntPtr skyle_client_get_instance();
+    [DllImport(Lib)] public static extern int skyle_client_set_transport(IntPtr client, ref SkyleTransportConfig cfg);
+    [DllImport(Lib)] public static extern int skyle_client_set_callbacks(IntPtr client, ref SkyleCallbackConfig cfg);
+    [DllImport(Lib)] public static extern int skyle_client_connect(IntPtr client);
+    [DllImport(Lib)] public static extern int skyle_client_disconnect(IntPtr client);
+    [DllImport(Lib)] public static extern int skyle_client_get_state(IntPtr client);
+    [DllImport(Lib)] public static extern int skyle_client_stop_background(IntPtr client);
+    [DllImport(Lib)] public static extern int skyle_client_request_version(IntPtr client);
 
-    [DllImport(Lib)] public static extern int eap_client_enable_gaze(IntPtr client, [MarshalAs(UnmanagedType.U1)] bool enable);
-    [DllImport(Lib)] public static extern int eap_client_enable_positioning(IntPtr client, [MarshalAs(UnmanagedType.U1)] bool enable);
-    [DllImport(Lib)] public static extern int eap_client_enable_video(IntPtr client, [MarshalAs(UnmanagedType.U1)] bool enable);
+    [DllImport(Lib)] public static extern int skyle_client_enable_gaze(IntPtr client, [MarshalAs(UnmanagedType.U1)] bool enable);
+    [DllImport(Lib)] public static extern int skyle_client_enable_positioning(IntPtr client, [MarshalAs(UnmanagedType.U1)] bool enable);
+    [DllImport(Lib)] public static extern int skyle_client_enable_video(IntPtr client, [MarshalAs(UnmanagedType.U1)] bool enable);
 
     // ---- macOS IOKit transport ----
 
-    [DllImport(Lib)] public static extern IntPtr eap_transport_iokit_create(ref EapTransportIokitConfig cfg);
-    [DllImport(Lib)] public static extern void eap_transport_iokit_destroy(IntPtr transport);
-    [DllImport(Lib)] public static extern IntPtr eap_transport_iokit_get_check_callback();
+    [DllImport(Lib)] public static extern IntPtr skyle_transport_iokit_create(ref SkyleTransportIokitConfig cfg);
+    [DllImport(Lib)] public static extern void skyle_transport_iokit_destroy(IntPtr transport);
+    [DllImport(Lib)] public static extern IntPtr skyle_transport_iokit_get_check_callback();
 
     // ---- Windows WinUSB transport ----
 
-    [DllImport(Lib)] public static extern IntPtr eap_transport_usb_create(ref EapTransportUsbConfig cfg);
-    [DllImport(Lib)] public static extern void eap_transport_usb_destroy(IntPtr transport);
-    [DllImport(Lib)] public static extern IntPtr eap_transport_usb_get_check_callback();
+    [DllImport(Lib)] public static extern IntPtr skyle_transport_usb_create(ref SkyleTransportUsbConfig cfg);
+    [DllImport(Lib)] public static extern void skyle_transport_usb_destroy(IntPtr transport);
+    [DllImport(Lib)] public static extern IntPtr skyle_transport_usb_get_check_callback();
 }

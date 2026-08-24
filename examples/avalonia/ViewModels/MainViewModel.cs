@@ -16,13 +16,13 @@ internal sealed class MainViewModel : ViewModelBase, IDisposable
     private volatile GazeSnapshot? _latestGaze;
     private volatile VideoFrame? _latestVideo;
     private volatile string _latestVersion = string.Empty;
-    private int _latestState = (int)EapConnectionState.Disconnected;
+    private int _latestState = (int)SkyleConnectionState.Disconnected;
 
     // What the UI has already consumed.
     private PositioningSnapshot? _posShown;
     private GazeSnapshot? _gazeShown;
     private VideoFrame? _videoShown;
-    private EapConnectionState _appliedState = (EapConnectionState)(-1);
+    private SkyleConnectionState _appliedState = (SkyleConnectionState)(-1);
 
     public MainViewModel()
     {
@@ -128,12 +128,12 @@ internal sealed class MainViewModel : ViewModelBase, IDisposable
 
     private void OnTick(object? sender, EventArgs e)
     {
-        var state = (EapConnectionState)Volatile.Read(ref _latestState);
+        var state = (SkyleConnectionState)Volatile.Read(ref _latestState);
         if (state != _appliedState)
         {
             _appliedState = state;
             UpdateConnectionUi(state);
-            if (state == EapConnectionState.LinkSynced) ApplyStreams();
+            if (state == SkyleConnectionState.LinkSynced) ApplyStreams();
         }
 
         var g = _latestGaze;
@@ -158,32 +158,32 @@ internal sealed class MainViewModel : ViewModelBase, IDisposable
         }
 
         var version = _latestVersion;
-        if (state == EapConnectionState.LinkSynced && version.Length > 0 && DeviceInfo != version)
+        if (state == SkyleConnectionState.LinkSynced && version.Length > 0 && DeviceInfo != version)
             DeviceInfo = version;
     }
 
     private void ApplyStreams()
     {
-        if (_appliedState != EapConnectionState.LinkSynced) return;
+        if (_appliedState != SkyleConnectionState.LinkSynced) return;
         _client.EnableGaze(true);                       // gaze readout is always live
         _client.EnablePositioning(IsPositioningSelected);
         _client.EnableVideo(IsVideoSelected);           // off when not viewing saves bandwidth
     }
 
-    private void UpdateConnectionUi(EapConnectionState state)
+    private void UpdateConnectionUi(SkyleConnectionState state)
     {
         switch (state)
         {
-            case EapConnectionState.LinkSynced:
+            case SkyleConnectionState.LinkSynced:
                 ConnectionLabel = "Streaming";
                 ConnectionBrush = new SolidColorBrush(Color.FromRgb(0x2E, 0xCC, 0x71)); // green
                 break;
-            case EapConnectionState.Disconnected:
+            case SkyleConnectionState.Disconnected:
                 ConnectionLabel = "Disconnected";
                 ConnectionBrush = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)); // gray
                 DeviceInfo = "No device";
                 break;
-            case EapConnectionState.Error:
+            case SkyleConnectionState.Error:
                 ConnectionLabel = "Error";
                 ConnectionBrush = new SolidColorBrush(Color.FromRgb(0xE7, 0x4C, 0x3C)); // red
                 break;

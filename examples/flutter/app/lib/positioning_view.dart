@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_eap_riverpod/flutter_eap_riverpod.dart';
+import 'package:flutter_skyle_riverpod/flutter_skyle_riverpod.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 /// Diagnostic positioning view: draws per-eye box, pupil (with fitted ellipse),
@@ -19,7 +19,7 @@ class PositioningView extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final face = ref.watch(eapPositioningDataStreamProvider).value;
+    final face = ref.watch(skylePositioningDataStreamProvider).value;
     return Center(
       child: AspectRatio(
         aspectRatio: sensorW / sensorH,

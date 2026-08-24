@@ -71,7 +71,7 @@ public class PositioningView : Control
         DrawText(context, distance, ox + 14, oy + drawH - 26, TextBrush, 14);
     }
 
-    private static void DrawEye(DrawingContext ctx, EapComplexEye eye, double scale, Func<float, float, Point> map)
+    private static void DrawEye(DrawingContext ctx, SkyleComplexEye eye, double scale, Func<float, float, Point> map)
     {
         // Eye bounding box (image-space uint16). Skip if empty.
         var b = eye.BoundingRect;
@@ -117,13 +117,13 @@ public class PositioningView : Control
         DrawDot(ctx, eye.RightGlint.Center, map);
     }
 
-    private static void DrawDot(DrawingContext ctx, EapPointF p, Func<float, float, Point> map)
+    private static void DrawDot(DrawingContext ctx, SkylePointF p, Func<float, float, Point> map)
     {
         if (IsZero(p)) return;
         ctx.DrawEllipse(GlintFill, null, map(p.X, p.Y), 2.0, 2.0);
     }
 
-    private static bool IsZero(EapPointF p) => p.X == 0f && p.Y == 0f;
+    private static bool IsZero(SkylePointF p) => p.X == 0f && p.Y == 0f;
 
     private static string Format(float mm) => mm > 0 ? $"{mm:0} mm" : "—";
 

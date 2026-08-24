@@ -7,7 +7,7 @@ import Foundation
 ///
 /// - Discovers the Skyle accessory by its MFi protocol string.
 /// - Reads bytes off the input stream and pushes them into the C client via
-///   `eap_client_process_received_data`.
+///   `skyle_client_process_received_data`.
 /// - The C library's send thread calls `write(_:length:)` (registered as the
 ///   push-transport write callback), which queues bytes onto the output stream.
 final class ExternalAccessoryTransport: NSObject, StreamDelegate {
@@ -145,7 +145,7 @@ final class ExternalAccessoryTransport: NSObject, StreamDelegate {
             let n = input.read(buffer, maxLength: capacity)
             if n > 0 {
                 // Feed each chunk into the push-mode parser.
-                eap_client_process_received_data(client, buffer, UInt16(n))
+                skyle_client_process_received_data(client, buffer, UInt16(n))
             } else {
                 break
             }

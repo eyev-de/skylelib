@@ -10,7 +10,7 @@ The only platform-specific part is the transport:
 | Platform | Transport | How |
 |----------|-----------|-----|
 | **macOS** | built-in IOKit | `eap_transport_iokit_*` (no USB code in Swift) |
-| **iPadOS** | ExternalAccessory + push mode | `eap_client_set_push_transport` + `eap_client_process_received_data` + `eap_client_tick` over an `EASession` |
+| **iPadOS** | ExternalAccessory + push mode | `skyle_client_set_push_transport` + `skyle_client_process_received_data` + `skyle_client_tick` over an `EASession` |
 
 The C API is exposed to Swift through a **bridging header**
 (`Support/Skylelib-Bridging-Header.h`) — no module map required. Symbols come from
@@ -93,7 +93,7 @@ examples/swiftui/
 
 ## How it works
 
-- **`SkyleClient`** wraps `eap_client`. It does the two-phase init
+- **`SkyleClient`** wraps `skyle_client`. It does the two-phase init
   (`get_instance` → `set_transport` → `set_callbacks` → `connect`), registers C
   callbacks as non-capturing `@convention(c)` closures, and routes them back to
   the instance via an `Unmanaged` context pointer passed as the callback
@@ -101,7 +101,7 @@ examples/swiftui/
 - **Callbacks run on the library's background I/O thread.** `SkyleClient` only
   decodes; `SkyleViewModel` hops to the main thread (`DispatchQueue.main.async`)
   before touching `@Published` state.
-- **Streams** are enabled only after `EAP_STATE_LINK_SYNCED`, and re-applied when
+- **Streams** are enabled only after `SKYLE_STATE_LINK_SYNCED`, and re-applied when
   the tab changes (`applyStreams()`): gaze always on, positioning/video per tab.
 - **Coordinates:** gaze is screen-space pixels (`both.smoothed`); positioning eye
   features are sensor-space, drawn scaled by 2464 × 2064. See
@@ -112,10 +112,10 @@ examples/swiftui/
 
 - The C structs import directly into Swift; callback payloads arrive as typed
   `UnsafePointer<eap_*_response>` — read `.pointee` and copy what you keep.
-- `eap_video_response.pixel_data` is **transient** — it is copied inside the
+- `skyle_video_response.pixel_data` is **transient** — it is copied inside the
   callback (`memcpy` into a Swift array).
 - The iOS write path uses a small backpressured queue gated on the output
-  stream's `hasSpaceAvailable`, matching the proven `flutter_eap` approach.
+  stream's `hasSpaceAvailable`, matching the proven `flutter_skyle` approach.
 - `HEADER_SEARCH_PATHS` points recursively into `dist/skylelib.xcframework`, so
   both the `<skylelib/...>` headers and the linked symbols come from the
   xcframework — no source tree required.

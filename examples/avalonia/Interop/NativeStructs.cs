@@ -4,33 +4,33 @@ using System.Runtime.InteropServices;
 namespace SkyleAvaloniaExample.Interop;
 
 // ============================================================================
-// Blittable mirrors of the C structs from include/skylelib/eap/...
+// Blittable mirrors of the C structs from include/skylelib/messages/...
 //
 // IMPORTANT FFI notes:
 //  * All callback payloads are delivered in HOST byte order (big-endian is a
 //    wire-only concern, decoded inside the library), so these marshal directly.
 //  * Every C `bool` is 1 byte -> [MarshalAs(U1)] bool (never the default 4-byte BOOL).
 //  * LayoutKind.Sequential applies the same natural alignment as C
-//    (e.g. the int64 timestamp lands at offset 8; eap_complex_gaze pads to 20).
+//    (e.g. the int64 timestamp lands at offset 8; skyle_complex_gaze pads to 20).
 //  The struct sizes in the comments are asserted at runtime in SkyleClient.
 // ============================================================================
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapPointF // 8 bytes
+internal struct SkylePointF // 8 bytes
 {
     public float X;
     public float Y;
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapSizeF // 8 bytes
+internal struct SkyleSizeF // 8 bytes
 {
     public float Width;
     public float Height;
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapRectF // 16 bytes
+internal struct SkyleRectF // 16 bytes
 {
     public float Top;
     public float Left;
@@ -39,7 +39,7 @@ internal struct EapRectF // 16 bytes
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapRectU // 8 bytes
+internal struct SkyleRectU // 8 bytes
 {
     public ushort Top;
     public ushort Left;
@@ -48,15 +48,15 @@ internal struct EapRectU // 8 bytes
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapRotatedRect // 20 bytes
+internal struct SkyleRotatedRect // 20 bytes
 {
-    public EapPointF Center;
-    public EapSizeF Size;
+    public SkylePointF Center;
+    public SkyleSizeF Size;
     public float Angle; // degrees, OpenCV convention
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapMessageHeader // 24 bytes
+internal struct SkyleMessageHeader // 24 bytes
 {
     public ushort MessageType;
     public ushort PayloadLength;
@@ -67,78 +67,78 @@ internal struct EapMessageHeader // 24 bytes
 // ---- Gaze ----
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapComplexGaze // 20 bytes (17 on the wire, padded in memory)
+internal struct SkyleComplexGaze // 20 bytes (17 on the wire, padded in memory)
 {
-    public EapPointF Raw;
-    public EapPointF Smoothed;
-    public byte Type; // EapEyeMovementType
+    public SkylePointF Raw;
+    public SkylePointF Smoothed;
+    public byte Type; // SkyleEyeMovementType
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapGazeResponse
+internal struct SkyleGazeResponse
 {
-    public EapMessageHeader Header;
-    public EapComplexGaze Left;
-    public EapComplexGaze Right;
-    public EapComplexGaze Both;
+    public SkyleMessageHeader Header;
+    public SkyleComplexGaze Left;
+    public SkyleComplexGaze Right;
+    public SkyleComplexGaze Both;
 }
 
 // ---- Positioning ----
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapComplexFeature // 44 bytes
+internal struct SkyleComplexFeature // 44 bytes
 {
-    public EapPointF Center;
-    public EapRectF BoundingRect;
-    public EapRotatedRect Ellipse;
+    public SkylePointF Center;
+    public SkyleRectF BoundingRect;
+    public SkyleRotatedRect Ellipse;
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapComplexIris // 44 bytes
+internal struct SkyleComplexIris // 44 bytes
 {
-    public EapPointF Center;
-    public EapPointF Top;
-    public EapPointF Left;
-    public EapPointF Right;
-    public EapPointF Bottom;
+    public SkylePointF Center;
+    public SkylePointF Top;
+    public SkylePointF Left;
+    public SkylePointF Right;
+    public SkylePointF Bottom;
     public float DistanceMm;
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapComplexEye // 184 bytes
+internal struct SkyleComplexEye // 184 bytes
 {
-    public EapRectU BoundingRect;   // image-space (uint16)
-    public EapComplexFeature Pupil;
-    public EapComplexFeature LeftGlint;
-    public EapComplexFeature RightGlint;
-    public EapComplexIris Iris;
+    public SkyleRectU BoundingRect;   // image-space (uint16)
+    public SkyleComplexFeature Pupil;
+    public SkyleComplexFeature LeftGlint;
+    public SkyleComplexFeature RightGlint;
+    public SkyleComplexIris Iris;
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapComplexEyes // 368 bytes
+internal struct SkyleComplexEyes // 368 bytes
 {
-    public EapComplexEye Left;
-    public EapComplexEye Right;
+    public SkyleComplexEye Left;
+    public SkyleComplexEye Right;
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapComplexFace // 384 bytes
+internal struct SkyleComplexFace // 384 bytes
 {
-    public EapRectF BoundingRect;   // screen-space
-    public EapComplexEyes Eyes;
+    public SkyleRectF BoundingRect;   // screen-space
+    public SkyleComplexEyes Eyes;
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapPositioningResponse
+internal struct SkylePositioningResponse
 {
-    public EapMessageHeader Header;
-    public EapComplexFace Face;
+    public SkyleMessageHeader Header;
+    public SkyleComplexFace Face;
 }
 
 // ---- Video ----
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapVideoResponse
+internal struct SkyleVideoResponse
 {
     public ushort Width;
     public ushort Height;
@@ -150,9 +150,9 @@ internal struct EapVideoResponse
 // ---- Version ----
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapVersionResponse
+internal struct SkyleVersionResponse
 {
-    public EapMessageHeader Header;
+    public SkyleMessageHeader Header;
     [MarshalAs(UnmanagedType.ByValArray, SizeConst = 32)] public byte[] Firmware;
     public ulong Serial;
     [MarshalAs(UnmanagedType.U1)] public bool IsDemoDevice;
@@ -165,7 +165,7 @@ internal struct EapVersionResponse
 // ---- Transport / callback configuration (passed to the library) ----
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapTransportIokitConfig
+internal struct SkyleTransportIokitConfig
 {
     public ushort VendorId;
     public ushort ProductId;
@@ -174,7 +174,7 @@ internal struct EapTransportIokitConfig
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapTransportUsbConfig
+internal struct SkyleTransportUsbConfig
 {
     public ushort VendorId;
     public ushort ProductId;
@@ -183,7 +183,7 @@ internal struct EapTransportUsbConfig
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapTransportConfig
+internal struct SkyleTransportConfig
 {
     public IntPtr TransportWrite;       // native fn pointer
     public IntPtr TransportRead;        // native fn pointer
@@ -196,7 +196,7 @@ internal struct EapTransportConfig
 }
 
 [StructLayout(LayoutKind.Sequential)]
-internal struct EapCallbackConfig
+internal struct SkyleCallbackConfig
 {
     public IntPtr OnGaze;
     public IntPtr OnPositioning;
