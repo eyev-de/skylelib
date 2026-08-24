@@ -69,8 +69,22 @@ static char g_holder[SKYLE_LINK_MAX_APP_ID + 1] = {0};
 // engine's subscriber slot.
 static flutter_skyle_link_suspend_fanout_fn g_suspend_fanout = NULL;
 
+// Host-control and client-presence hooks (same single-writer/plain-read
+// pattern as g_suspend_fanout). Both fire only while this process serves the
+// hub - commands/events, not state, so there is no cache behind them.
+static flutter_skyle_link_host_control_fanout_fn g_host_control_fanout = NULL;
+static flutter_skyle_link_client_presence_fanout_fn g_client_presence_fanout = NULL;
+
 void flutter_skyle_link_glue_set_fanout_hook(flutter_skyle_link_suspend_fanout_fn hook) {
     g_suspend_fanout = hook;
+}
+
+void flutter_skyle_link_glue_set_host_control_fanout_hook(flutter_skyle_link_host_control_fanout_fn hook) {
+    g_host_control_fanout = hook;
+}
+
+void flutter_skyle_link_glue_set_client_presence_fanout_hook(flutter_skyle_link_client_presence_fanout_fn hook) {
+    g_client_presence_fanout = hook;
 }
 
 // =============================================================================
@@ -145,6 +159,30 @@ static void link_glue_hub_event(const skyle_hub_event* event, void* user_data) {
         case SKYLE_HUB_EVENT_SUSPEND_CHANGED:
             link_glue_update_suspension(event->suspended, event->app_id);
             break;
+
+        case SKYLE_HUB_EVENT_HOST_CONTROL: {
+            LOGD("host control: id=%u len=%u sender=%s", (unsigned)event->control_id, (unsigned)event->data_len,
+                 event->app_id ? event->app_id : "(unknown)");
+            // Synchronous within the hub callback; the fan-out copies the
+            // value and sender per subscriber before delivery.
+            flutter_skyle_link_host_control_fanout_fn fanout = g_host_control_fanout;
+            if (fanout) {
+                fanout(event->control_id, event->data, event->data_len, event->app_id);
+            }
+            break;
+        }
+
+        case SKYLE_HUB_EVENT_CLIENT_CONNECTED:
+        case SKYLE_HUB_EVENT_CLIENT_DISCONNECTED: {
+            bool connected = (event->type == SKYLE_HUB_EVENT_CLIENT_CONNECTED);
+            LOGD("link client %s: app=%s count=%d", connected ? "connected" : "disconnected",
+                 event->app_id ? event->app_id : "(unknown)", event->client_count);
+            flutter_skyle_link_client_presence_fanout_fn fanout = g_client_presence_fanout;
+            if (fanout) {
+                fanout(connected, event->app_id, event->client_count);
+            }
+            break;
+        }
 
         case SKYLE_HUB_EVENT_ERROR:
             LOGE("hub error: %s", event->message ? event->message : "(no message)");
@@ -243,5 +281,16 @@ int flutter_skyle_link_set_suspended(skyle_client* client, bool suspended) {
     if (!client) return -1;
     int result = (int)skyle_link_set_suspended(client, suspended);
     LOGD("link_set_suspended: %d -> %d", suspended ? 1 : 0, result);
+    return result;
+}
+
+// =============================================================================
+// Host control (client mode)
+// =============================================================================
+
+int flutter_skyle_link_send_host_control(skyle_client* client, uint16_t control_id, const uint8_t* value, uint16_t value_len) {
+    if (!client) return -1;
+    int result = (int)skyle_link_send_host_control(client, control_id, value, value_len);
+    LOGD("link_send_host_control: id=%u len=%u -> %d", (unsigned)control_id, (unsigned)value_len, result);
     return result;
 }

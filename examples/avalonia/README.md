@@ -15,9 +15,22 @@ USB transport, and live gaze / positioning / video streams.
   ellipse), glints, iris rings and per-eye distance — in the camera sensor space
   (2464 × 2064), the same geometry the Flutter app uses.
 - **Video view** that converts grayscale / RGB / RGBA frames to a BGRA bitmap.
+- **Skyle Link host controls** - two toggles (menu bar, pointer overlay) and a
+  Calibrate button that send fire-and-forget `skyle_link_send_host_control`
+  commands to a hub-hosting Skyle app; the send result is appended to the
+  connection label (refused = this app is not a link client right now).
 
 No USB code lives in C#: the library's built-in transports do all USB I/O
 (`eap_transport_iokit_*` on macOS, `eap_transport_usb_*` on Windows).
+
+The app also runs the **Skyle Link supervisor** in its callback-less mode
+(`skyle_link_set_identity` + `skyle_link_set_supervisor_enabled` after the
+transport is registered): when another app already shares the tracker on the
+loopback port, this example becomes a link CLIENT instead of opening USB
+exclusively. In that mode the supervisor stashes the app-owned USB transport
+and restores it on re-ownership - the app's USB handle stays open while in
+CLIENT mode (fine for a demo; register a USB ownership callback if a real app
+must release the device).
 
 ## Prerequisites
 

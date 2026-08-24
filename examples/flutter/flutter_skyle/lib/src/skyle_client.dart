@@ -203,6 +203,17 @@ class SkyleClient implements SkyleControl, SkyleGaze, SkylePositioning, SkyleVid
   /// Not suspended when Skyle Link is unused or unsupported.
   SkyleLinkSuspendState get currentSuspensionState => _ffi.currentSuspensionState;
 
+  /// Skyle Link HOST_CONTROL commands received while this process serves the
+  /// hub (broadcast). Only the hub owner receives them - a local-link client
+  /// sends via [sendHostControl] instead. Commands, not state: there is no
+  /// seed, nothing is cached, and the last writer wins at the receiver.
+  Stream<SkyleLinkHostControl> get hostControlStream => _ffi.hostControlStream;
+
+  /// Skyle Link hub client presence changes (broadcast). Only the hub owner
+  /// receives them; the disconnect events carry the app id a
+  /// restore-on-disconnect policy keys on. Events, not state - no seed.
+  Stream<SkyleLinkClientEvent> get linkClientStream => _ffi.linkClientStream;
+
   void _log(LogLevel level, String message) {
     _ffi.emitLog(level, 'SkyleClient', message);
   }
@@ -424,6 +435,48 @@ class SkyleClient implements SkyleControl, SkyleGaze, SkylePositioning, SkyleVid
     }
     return result == 0;
   }
+
+  /// Send a fire-and-forget HOST_CONTROL command to the app hosting the hub
+  /// (Skyle X). Local-link client mode only: returns false and does nothing
+  /// when this process is the hub owner or not in local mode. No reply, no
+  /// lease - unknown control ids are ignored by the receiver and the last
+  /// writer wins. [value] layout is per control id (see
+  /// [SkyleLinkHostControlId]); the typed helpers below cover the well-known
+  /// ids.
+  Future<bool> sendHostControl(int controlId, [Uint8List? value]) async {
+    if (!_initialized) {
+      return false;
+    }
+    if (_ffi.isHubOwner) {
+      _log(LogLevel.warning, 'sendHostControl ignored - this process is the hub owner');
+      return false;
+    }
+    if (!_ffi.isLocalLink) {
+      _log(LogLevel.warning, 'sendHostControl ignored - not in local-link mode');
+      return false;
+    }
+    final result = _ffi.sendHostControl(controlId, value ?? Uint8List(0));
+    if (result != 0) {
+      _log(LogLevel.warning, 'sendHostControl($controlId) failed (code $result)');
+    }
+    return result == 0;
+  }
+
+  /// Show or completely hide the hub-hosting app's menu bar (hiding also
+  /// disables its pause edge). The host restores a hidden menu bar when this
+  /// app disconnects.
+  Future<bool> setHostMenuBarVisible(bool visible) => sendHostControl(SkyleLinkHostControlId.menuBar, Uint8List.fromList([visible ? 1 : 0]));
+
+  /// Show or hide the hub-hosting app's pointer overlay (hiding also disables
+  /// snap-to-item and the left/right edges). The host restores a hidden
+  /// overlay when this app disconnects.
+  Future<bool> setHostPointerVisible(bool visible) => sendHostControl(SkyleLinkHostControlId.pointerOverlay, Uint8List.fromList([visible ? 1 : 0]));
+
+  /// Bring the hub-hosting app to the foreground and start a calibration.
+  /// [points] 0 sends no value byte (the host's default point count applies),
+  /// otherwise pass a point count the host supports (5 or 9).
+  Future<bool> startHostCalibration({int points = 0}) =>
+      sendHostControl(SkyleLinkHostControlId.startCalibration, points > 0 ? Uint8List.fromList([points]) : null);
 
   /// Stop the Android process-wide USB host (SkyleUsbHost.stop()): disables the
   /// Skyle Link supervisor (BYE(handover) to hub clients), releases the USB

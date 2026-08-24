@@ -656,6 +656,113 @@ final class SkyleSuspensionProvider
 
 String _$skyleSuspensionHash() => r'bc82c4d4d979677414a62f571f63fbf6323b8484';
 
+/// Stream provider for Skyle Link HOST_CONTROL commands received while this
+/// process serves the hub. Commands, not state - deliberately unseeded
+/// (unlike [skyleSuspension] there is nothing to seed from).
+
+@ProviderFor(skyleHostControl)
+final skyleHostControlProvider = SkyleHostControlProvider._();
+
+/// Stream provider for Skyle Link HOST_CONTROL commands received while this
+/// process serves the hub. Commands, not state - deliberately unseeded
+/// (unlike [skyleSuspension] there is nothing to seed from).
+
+final class SkyleHostControlProvider
+    extends
+        $FunctionalProvider<
+          AsyncValue<SkyleLinkHostControl>,
+          SkyleLinkHostControl,
+          Stream<SkyleLinkHostControl>
+        >
+    with
+        $FutureModifier<SkyleLinkHostControl>,
+        $StreamProvider<SkyleLinkHostControl> {
+  /// Stream provider for Skyle Link HOST_CONTROL commands received while this
+  /// process serves the hub. Commands, not state - deliberately unseeded
+  /// (unlike [skyleSuspension] there is nothing to seed from).
+  SkyleHostControlProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'skyleHostControlProvider',
+        isAutoDispose: false,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$skyleHostControlHash();
+
+  @$internal
+  @override
+  $StreamProviderElement<SkyleLinkHostControl> $createElement(
+    $ProviderPointer pointer,
+  ) => $StreamProviderElement(pointer);
+
+  @override
+  Stream<SkyleLinkHostControl> create(Ref ref) {
+    return skyleHostControl(ref);
+  }
+}
+
+String _$skyleHostControlHash() => r'd40b19b0ef6d9c31146d3cd36ff7d792a7a79e38';
+
+/// Stream provider for Skyle Link hub client presence changes
+/// (connect/disconnect) while this process serves the hub. Events, not
+/// state - deliberately unseeded; disconnects carry the app id a
+/// restore-on-disconnect policy keys on.
+
+@ProviderFor(skyleLinkClients)
+final skyleLinkClientsProvider = SkyleLinkClientsProvider._();
+
+/// Stream provider for Skyle Link hub client presence changes
+/// (connect/disconnect) while this process serves the hub. Events, not
+/// state - deliberately unseeded; disconnects carry the app id a
+/// restore-on-disconnect policy keys on.
+
+final class SkyleLinkClientsProvider
+    extends
+        $FunctionalProvider<
+          AsyncValue<SkyleLinkClientEvent>,
+          SkyleLinkClientEvent,
+          Stream<SkyleLinkClientEvent>
+        >
+    with
+        $FutureModifier<SkyleLinkClientEvent>,
+        $StreamProvider<SkyleLinkClientEvent> {
+  /// Stream provider for Skyle Link hub client presence changes
+  /// (connect/disconnect) while this process serves the hub. Events, not
+  /// state - deliberately unseeded; disconnects carry the app id a
+  /// restore-on-disconnect policy keys on.
+  SkyleLinkClientsProvider._()
+    : super(
+        from: null,
+        argument: null,
+        retry: null,
+        name: r'skyleLinkClientsProvider',
+        isAutoDispose: false,
+        dependencies: null,
+        $allTransitiveDependencies: null,
+      );
+
+  @override
+  String debugGetCreateSourceHash() => _$skyleLinkClientsHash();
+
+  @$internal
+  @override
+  $StreamProviderElement<SkyleLinkClientEvent> $createElement(
+    $ProviderPointer pointer,
+  ) => $StreamProviderElement(pointer);
+
+  @override
+  Stream<SkyleLinkClientEvent> create(Ref ref) {
+    return skyleLinkClients(ref);
+  }
+}
+
+String _$skyleLinkClientsHash() => r'c715e58dd9ffad65144f626a6545d3a911da5f8f';
+
 /// Current connection state (from stream)
 
 @ProviderFor(skyleConnectionState)

@@ -26,6 +26,14 @@ internal enum SkyleResult
     Memory = -6,
 }
 
+/// <summary>Mirror of <c>skyle_link_host_control</c> (skyle_link.h).</summary>
+internal enum SkyleLinkHostControl : ushort
+{
+    MenuBar = 1,
+    PointerOverlay = 2,
+    StartCalibration = 3,
+}
+
 /// <summary>Mirror of <c>skyle_eye_movement_type</c> (skyle_types.h).</summary>
 internal enum SkyleEyeMovementType : byte
 {

@@ -341,6 +341,37 @@ All participants observe `client.suspensionStream` (seed from
 `client.currentSuspensionState`); `flutter_skyle_riverpod` exposes this as
 `skyleSuspensionProvider`. The lease dies with the holder's connection.
 
+### Host control
+
+Any local-link client can send fire-and-forget commands to the app hosting
+the hub (Skyle X). No reply, no lease: the receiver ignores unknown control
+ids, the last writer wins, and the host restores UI hidden by an app when
+that app disconnects.
+
+```dart
+await client.setHostMenuBarVisible(false);   // hide Skyle X's menu bar
+await client.setHostPointerVisible(false);   // hide the pointer overlay
+await client.startHostCalibration();         // foreground Skyle X + calibrate
+// Generic form (new control ids need no plugin change):
+await client.sendHostControl(SkyleLinkHostControlId.menuBar, Uint8List.fromList([1]));
+```
+
+| id | name | value | semantics |
+|----|------|-------|-----------|
+| 1 | `SkyleLinkHostControlId.menuBar` | u8 visible (0/1) | 0 hides the menu bar completely; the pause edge feature is disabled with it |
+| 2 | `SkyleLinkHostControlId.pointerOverlay` | u8 visible (0/1) | 0 hides the pointer overlay; snap-to-item and the left/right edges are disabled with it |
+| 3 | `SkyleLinkHostControlId.startCalibration` | optional u8 point count (absent/0 = app default, else 5 or 9) | bring the host app to the foreground and start a calibration |
+
+Every call returns false (and sends nothing) when this process is not a link
+client - i.e. it is the hub owner itself or on direct USB. The hub-hosting
+app receives the commands on `client.hostControlStream` and observes client
+connects/disconnects on `client.linkClientStream` (the disconnect events
+carry the app id its restore-on-disconnect policy keys on); both only ever
+emit for the hub owner. `flutter_skyle_riverpod` exposes them as
+`skyleHostControlProvider` and `skyleLinkClientsProvider` (deliberately
+unseeded - commands/events, not state). Hubs built before HOST_CONTROL
+support (HELLO_ACK capability bit 0) silently ignore the frame.
+
 ### Orderly quit (Android)
 
 `SkyleClient.stopUsbHost()` disables the supervisor (BYE(handover) to all hub

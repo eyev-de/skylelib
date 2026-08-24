@@ -125,6 +125,25 @@ Stream<SkyleLinkSuspendState> skyleSuspension(Ref ref) async* {
   yield* client.suspensionStream;
 }
 
+/// Stream provider for Skyle Link HOST_CONTROL commands received while this
+/// process serves the hub. Commands, not state - deliberately unseeded
+/// (unlike [skyleSuspension] there is nothing to seed from).
+@Riverpod(keepAlive: true)
+Stream<SkyleLinkHostControl> skyleHostControl(Ref ref) {
+  final client = ref.watch(skyleClientProvider);
+  return client.hostControlStream;
+}
+
+/// Stream provider for Skyle Link hub client presence changes
+/// (connect/disconnect) while this process serves the hub. Events, not
+/// state - deliberately unseeded; disconnects carry the app id a
+/// restore-on-disconnect policy keys on.
+@Riverpod(keepAlive: true)
+Stream<SkyleLinkClientEvent> skyleLinkClients(Ref ref) {
+  final client = ref.watch(skyleClientProvider);
+  return client.linkClientStream;
+}
+
 /// Current connection state (from stream)
 @Riverpod(keepAlive: true)
 ConnectionState skyleConnectionState(Ref ref) {

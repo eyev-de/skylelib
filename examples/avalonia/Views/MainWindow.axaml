@@ -35,7 +35,7 @@
         </Style>
     </Window.Styles>
 
-    <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="16">
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Margin="16">
 
         <!-- Top bar: connection indicator + device info -->
         <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,12">
@@ -59,8 +59,21 @@
             </StackPanel>
         </Border>
 
+        <!-- Skyle Link host controls: fire-and-forget commands to the hub-hosting
+             Skyle app (only delivered while this app is a link client) -->
+        <Border Grid.Row="2" Background="#2A2A30" CornerRadius="8" Padding="8,6"
+                HorizontalAlignment="Center" Margin="0,0,0,14">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <ToggleButton Content="Menu bar"
+                              IsChecked="{Binding HostMenuBarVisible, Mode=TwoWay}" />
+                <ToggleButton Content="Pointer overlay"
+                              IsChecked="{Binding HostPointerVisible, Mode=TwoWay}" />
+                <Button Content="Calibrate" Click="OnCalibrateClick" />
+            </StackPanel>
+        </Border>
+
         <!-- Content host: positioning OR video -->
-        <Panel Grid.Row="2">
+        <Panel Grid.Row="3">
             <views:PositioningView Source="{Binding Positioning}"
                                    IsVisible="{Binding ShowPositioning}" />
             <views:VideoView Source="{Binding Frame}"
@@ -68,7 +81,7 @@
         </Panel>
 
         <!-- Gaze readout -->
-        <Border Grid.Row="3" Background="#2A2A30" CornerRadius="8" Padding="14,10" Margin="0,14,0,0">
+        <Border Grid.Row="4" Background="#2A2A30" CornerRadius="8" Padding="14,10" Margin="0,14,0,0">
             <TextBlock Text="{Binding GazeText}" FontSize="16" FontFamily="monospace"
                        Foreground="White" />
         </Border>

@@ -77,6 +77,14 @@ internal static class NativeMethods
     [DllImport(Lib)] public static extern int skyle_client_enable_positioning(IntPtr client, [MarshalAs(UnmanagedType.U1)] bool enable);
     [DllImport(Lib)] public static extern int skyle_client_enable_video(IntPtr client, [MarshalAs(UnmanagedType.U1)] bool enable);
 
+    // ---- Skyle Link (transport supervisor + host control) ----
+
+    [DllImport(Lib)] public static extern void skyle_link_set_identity([MarshalAs(UnmanagedType.LPUTF8Str)] string appId, byte tier, [MarshalAs(UnmanagedType.U1)] bool usbCapable);
+    [DllImport(Lib)] public static extern void skyle_link_set_supervisor_enabled([MarshalAs(UnmanagedType.U1)] bool enabled);
+    [DllImport(Lib)] public static extern int skyle_link_get_supervisor_mode();
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] public static extern bool skyle_client_is_local_link(IntPtr client);
+    [DllImport(Lib)] public static extern int skyle_link_send_host_control(IntPtr client, ushort controlId, byte[]? value, ushort valueLen);
+
     // ---- macOS IOKit transport ----
 
     [DllImport(Lib)] public static extern IntPtr skyle_transport_iokit_create(ref SkyleTransportIokitConfig cfg);

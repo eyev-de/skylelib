@@ -69,6 +69,29 @@ typedef void (*flutter_skyle_link_suspend_fanout_fn)(bool suspended, const char*
 /** Register/replace the hook. Idempotent; NULL clears. */
 void flutter_skyle_link_glue_set_fanout_hook(flutter_skyle_link_suspend_fanout_fn hook);
 
+/**
+ * Multi-engine host-control fan-out hook: a HOST_CONTROL command (spec
+ * section 8.1) received by the hub this process serves. `value` (NULL when
+ * value_len is 0) and `sender_app_id` are valid only during the call (the
+ * callee copies per subscriber). Fires synchronously within the hub event
+ * callback - commands, not state: no cache, no lock, no mode-change reset.
+ */
+typedef void (*flutter_skyle_link_host_control_fanout_fn)(uint16_t control_id, const uint8_t* value, uint16_t value_len, const char* sender_app_id);
+
+/** Register/replace the hook. Idempotent; NULL clears. */
+void flutter_skyle_link_glue_set_host_control_fanout_hook(flutter_skyle_link_host_control_fanout_fn hook);
+
+/**
+ * Multi-engine link-client presence fan-out hook: a client connected to /
+ * disconnected from the hub this process serves (the receiver's input for a
+ * restore-on-disconnect policy keyed on app_id). `app_id` is valid only
+ * during the call (the callee copies per subscriber); may be NULL.
+ */
+typedef void (*flutter_skyle_link_client_presence_fanout_fn)(bool connected, const char* app_id, int client_count);
+
+/** Register/replace the hook. Idempotent; NULL clears. */
+void flutter_skyle_link_glue_set_client_presence_fanout_hook(flutter_skyle_link_client_presence_fanout_fn hook);
+
 // =============================================================================
 // Glue installation + automatic transport supervisor
 // =============================================================================
@@ -120,6 +143,15 @@ FLUTTER_SKYLE_LINK_EXPORT int flutter_skyle_get_supervisor_mode(void);
  * Returns skyle_result as int.
  */
 FLUTTER_SKYLE_LINK_EXPORT int flutter_skyle_link_set_suspended(skyle_client* client, bool suspended);
+
+/**
+ * Fire-and-forget HOST_CONTROL command to the app hosting the hub (client
+ * mode only; spec section 8.1): no reply, no lease, last writer wins at the
+ * receiver, unknown control ids are ignored there. `value` layout is per
+ * control id (skyle_link_host_control); may be NULL when value_len is 0.
+ * Returns skyle_result as int.
+ */
+FLUTTER_SKYLE_LINK_EXPORT int flutter_skyle_link_send_host_control(skyle_client* client, uint16_t control_id, const uint8_t* value, uint16_t value_len);
 
 /**
  * Read the cached suspension state (for Dart stream seeding). `holder_buf`

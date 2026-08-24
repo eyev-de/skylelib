@@ -95,6 +95,8 @@ class _HomePageState extends ConsumerState<HomePage> {
                 },
               ),
               const SizedBox(height: 14),
+              const _HostControls(),
+              const SizedBox(height: 14),
               Expanded(
                 child: _mode == ViewMode.positioning
                     ? const PositioningView()
@@ -172,6 +174,69 @@ class _SegmentedControl extends StatelessWidget {
         selected: {mode},
         onSelectionChanged: (s) => onChanged(s.first),
       ),
+    );
+  }
+}
+
+/// Host-control test buttons: fire-and-forget Skyle Link commands to the app
+/// hosting the hub (Skyle X). They only work while this app runs as a link
+/// client; a refused send (hub owner / direct USB) shows a SnackBar. The
+/// toggle state is app-local - the host restores hidden UI itself when this
+/// app disconnects.
+class _HostControls extends ConsumerStatefulWidget {
+  const _HostControls();
+
+  @override
+  ConsumerState<_HostControls> createState() => _HostControlsState();
+}
+
+class _HostControlsState extends ConsumerState<_HostControls> {
+  bool _menuBarVisible = true;
+  bool _pointerVisible = true;
+
+  Future<void> _send(Future<bool> Function(SkyleClient client) action,
+      VoidCallback onAccepted) async {
+    final accepted = await action(ref.read(skyleClientProvider));
+    if (accepted) {
+      onAccepted();
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Host control refused - not connected to a Skyle Link hub'),
+      ));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        OutlinedButton.icon(
+          icon: Icon(_menuBarVisible ? Icons.visibility_off : Icons.visibility,
+              size: 18),
+          label: Text(_menuBarVisible ? 'Hide menu bar' : 'Show menu bar'),
+          onPressed: () => _send(
+            (c) => c.setHostMenuBarVisible(!_menuBarVisible),
+            () => setState(() => _menuBarVisible = !_menuBarVisible),
+          ),
+        ),
+        const SizedBox(width: 10),
+        OutlinedButton.icon(
+          icon: Icon(_pointerVisible ? Icons.visibility_off : Icons.visibility,
+              size: 18),
+          label: Text(_pointerVisible ? 'Hide pointer' : 'Show pointer'),
+          onPressed: () => _send(
+            (c) => c.setHostPointerVisible(!_pointerVisible),
+            () => setState(() => _pointerVisible = !_pointerVisible),
+          ),
+        ),
+        const SizedBox(width: 10),
+        OutlinedButton.icon(
+          icon: const Icon(Icons.center_focus_strong, size: 18),
+          label: const Text('Start calibration'),
+          onPressed: () => _send((c) => c.startHostCalibration(), () {}),
+        ),
+      ],
     );
   }
 }

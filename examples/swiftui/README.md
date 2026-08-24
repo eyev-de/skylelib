@@ -16,6 +16,19 @@ The C API is exposed to Swift through a **bridging header**
 (`Support/Skylelib-Bridging-Header.h`) — no module map required. Symbols come from
 the prebuilt `skylelib.xcframework`.
 
+On macOS the app also runs the **Skyle Link supervisor** in its callback-less
+mode (`skyle_link_set_identity` + `skyle_link_set_supervisor_enabled` after the
+transport is registered): when another app already shares the tracker on the
+loopback port, the example becomes a link CLIENT instead of opening USB
+exclusively. In that mode the supervisor stashes the app-owned IOKit transport
+and restores it on re-ownership - the app's USB handle stays open while in
+CLIENT mode (fine for a demo; register a USB ownership callback if a real app
+must release the device). A row of **host controls** (menu bar / pointer
+overlay toggles + Calibrate) sends fire-and-forget
+`skyle_link_send_host_control` commands to a hub-hosting Skyle app; the send
+result appears next to the connection label (refused = not a link client).
+iPadOS is push mode - no Skyle Link there, the controls are compiled away.
+
 ## Prerequisites
 
 - Xcode 15+ (uses the iOS / macOS SDKs).

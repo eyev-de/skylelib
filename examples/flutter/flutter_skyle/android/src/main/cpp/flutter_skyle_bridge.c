@@ -469,12 +469,15 @@ static bridge_context* get_or_create_context(skyle_client* client) {
 
     register_client_context(client, ctx);
 
-    // Wire the Skyle Link glue's process hook (idempotent re-assignment):
-    // suspension changes fan out to every engine's subscriber slot via the
-    // shared fan-out module. Then install the glue's event adapters
-    // (supervisor hub events + client-level suspension callback) once - this
-    // runs with zero Dart engines when SkyleUsbHost starts the transport.
+    // Wire the Skyle Link glue's process hooks (idempotent re-assignment):
+    // suspension changes, host-control commands, and hub client presence fan
+    // out to every engine's subscriber slot via the shared fan-out module.
+    // Then install the glue's event adapters (supervisor hub events +
+    // client-level suspension callback) once - this runs with zero Dart
+    // engines when SkyleUsbHost starts the transport.
     flutter_skyle_link_glue_set_fanout_hook(flutter_skyle_fanout_dispatch_suspend_state);
+    flutter_skyle_link_glue_set_host_control_fanout_hook(flutter_skyle_fanout_dispatch_host_control);
+    flutter_skyle_link_glue_set_client_presence_fanout_hook(flutter_skyle_fanout_dispatch_link_client);
     flutter_skyle_link_glue_install(client);
 
     LOGD("get_or_create_context: Created new context for client %p", client);

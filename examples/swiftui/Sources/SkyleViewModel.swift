@@ -11,6 +11,13 @@ final class SkyleViewModel: ObservableObject {
     @Published var selection: ViewMode = .positioning
     @Published var face: skyle_complex_face?
     @Published var videoImage: CGImage?
+    #if os(macOS)
+    // Skyle Link host controls (toggle state is app-local; the commands only
+    // reach a hub-hosting Skyle app while this app is a link client).
+    @Published var hostMenuBarVisible = true
+    @Published var hostPointerVisible = true
+    @Published var hostControlNote = ""
+    #endif
 
     private let client = SkyleClient()
     private var state: skyle_connection_state = SKYLE_STATE_DISCONNECTED
@@ -50,6 +57,28 @@ final class SkyleViewModel: ObservableObject {
         client.enablePositioning(selection == .positioning)
         client.enableVideo(selection == .video)              // off when hidden saves bandwidth
     }
+
+    #if os(macOS)
+    // MARK: - Skyle Link host controls
+
+    func setHostMenuBarVisible(_ visible: Bool) {
+        noteHostControl("Menu bar", client.setHostMenuBarVisible(visible))
+    }
+
+    func setHostPointerVisible(_ visible: Bool) {
+        noteHostControl("Pointer", client.setHostPointerVisible(visible))
+    }
+
+    func startHostCalibration() {
+        noteHostControl("Calibrate", client.startHostCalibration())
+    }
+
+    private func noteHostControl(_ what: String, _ result: skyle_result) {
+        hostControlNote = result == SKYLE_OK
+            ? "\(what): sent"
+            : "\(what): refused (\(result.rawValue), not a link client)"
+    }
+    #endif
 
     private func handleState(_ s: skyle_connection_state) {
         state = s

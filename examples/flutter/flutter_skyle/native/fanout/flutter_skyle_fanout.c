@@ -657,6 +657,37 @@ void flutter_skyle_fanout_dispatch_suspend_state(bool suspended, const char* hol
     FANOUT_UNLOCK();
 }
 
+void flutter_skyle_fanout_dispatch_host_control(uint16_t control_id, const uint8_t* value, uint16_t value_len, const char* sender_app_id) {
+    FANOUT_LOCK();
+    for (int i = 0; i < FLUTTER_SKYLE_MAX_SUBSCRIBERS; i++) {
+        eap_subscriber* sub = &g_subscribers[i];
+        if (sub->handle == 0 || !sub->cbs.on_host_control) continue;
+        // Heap copies per subscriber: NativeCallable.listener delivers
+        // asynchronously, each Dart isolate frees its own via flutter_skyle_free.
+        uint8_t* value_copy = NULL;
+        if (value && value_len > 0) {
+            value_copy = (uint8_t*)malloc(value_len);
+            if (value_copy) {
+                memcpy(value_copy, value, value_len);
+            }
+        }
+        char* sender_copy = sender_app_id ? fanout_strdup(sender_app_id) : NULL;
+        sub->cbs.on_host_control(control_id, value_copy, value_copy ? (int32_t)value_len : 0, sender_copy, sub->cbs.user_data);
+    }
+    FANOUT_UNLOCK();
+}
+
+void flutter_skyle_fanout_dispatch_link_client(bool connected, const char* app_id, int client_count) {
+    FANOUT_LOCK();
+    for (int i = 0; i < FLUTTER_SKYLE_MAX_SUBSCRIBERS; i++) {
+        eap_subscriber* sub = &g_subscribers[i];
+        if (sub->handle == 0 || !sub->cbs.on_link_client) continue;
+        char* app_id_copy = app_id ? fanout_strdup(app_id) : NULL;
+        sub->cbs.on_link_client(connected, app_id_copy, client_count, sub->cbs.user_data);
+    }
+    FANOUT_UNLOCK();
+}
+
 const char* flutter_skyle_fanout_last_error(void) {
     return g_last_error[0] != '\0' ? g_last_error : NULL;
 }

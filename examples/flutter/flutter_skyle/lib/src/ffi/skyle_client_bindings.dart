@@ -43,6 +43,16 @@ typedef DartErrorCallback = Void Function(Pointer<Utf8> errorMessage, Pointer<Vo
 // (or nullptr when not suspended) that Dart must free with flutter_skyle_free.
 typedef DartSuspendStateCallback = Void Function(Bool suspended, Pointer<Utf8> holder, Pointer<Void> userData);
 
+// Skyle Link: HOST_CONTROL command received by the hub this process serves.
+// `value` (nullptr when valueLen is 0) and `senderAppId` are heap-allocated
+// copies that Dart must free with flutter_skyle_free.
+typedef DartHostControlCallback = Void Function(Uint16 controlId, Pointer<Uint8> value, Int32 valueLen, Pointer<Utf8> senderAppId, Pointer<Void> userData);
+
+// Skyle Link: a client connected to / disconnected from the hub this process
+// serves. `appId` is a heap-allocated copy that Dart must free with
+// flutter_skyle_free.
+typedef DartLinkClientCallback = Void Function(Bool connected, Pointer<Utf8> appId, Int32 clientCount, Pointer<Void> userData);
+
 // =============================================================================
 // Callbacks Structure (matches flutter_skyle_callbacks from C)
 // =============================================================================
@@ -70,6 +80,12 @@ final class FlutterSkyleCallbacks extends Struct {
   // onSuspendState is dispatched by the subscriber fan-out on all pull-mode
   // platforms; it never fires on iOS (no Skyle Link supervisor there).
   external Pointer<NativeFunction<DartSuspendStateCallback>> onSuspendState;
+
+  // onHostControl then onLinkClient (this order is ABI): HOST_CONTROL
+  // commands and hub client presence, delivered to the hub owner only; like
+  // onSuspendState they never fire on iOS.
+  external Pointer<NativeFunction<DartHostControlCallback>> onHostControl;
+  external Pointer<NativeFunction<DartLinkClientCallback>> onLinkClient;
 }
 
 // =============================================================================
@@ -185,6 +201,9 @@ typedef FlutterSkyleLinkSetSuspended = int Function(Pointer<SkyleClientNative> c
 typedef FlutterSkyleGetSuspensionStateNative = Void Function(Pointer<Bool> suspended, Pointer<Utf8> holderBuf, Size bufLen);
 typedef FlutterSkyleGetSuspensionState = void Function(Pointer<Bool> suspended, Pointer<Utf8> holderBuf, int bufLen);
 
+typedef FlutterSkyleLinkSendHostControlNative = Int32 Function(Pointer<SkyleClientNative> client, Uint16 controlId, Pointer<Uint8> value, Uint16 valueLen);
+typedef FlutterSkyleLinkSendHostControl = int Function(Pointer<SkyleClientNative> client, int controlId, Pointer<Uint8> value, int valueLen);
+
 
 // =============================================================================
 // Bindings Class
@@ -234,6 +253,10 @@ class SkyleClientBindings {
   late final FlutterSkyleGetSupervisorMode? getSupervisorMode;
   late final FlutterSkyleLinkSetSuspended? linkSetSuspended;
   late final FlutterSkyleGetSuspensionState? getSuspensionState;
+
+  /// Host-control send (separate lookup: an older shim exports the other
+  /// Skyle Link symbols but predates HOST_CONTROL support).
+  late final FlutterSkyleLinkSendHostControl? linkSendHostControl;
 
   /// Native function pointer for flutter_skyle_free, suitable for
   /// [NativeFinalizer] / [Pointer.asTypedList] finalizer parameter.
@@ -333,6 +356,15 @@ class SkyleClientBindings {
       getSupervisorMode = null;
       linkSetSuspended = null;
       getSuspensionState = null;
+    }
+
+    // Host-control send (own try block, pattern of addCallbacksEngine: an
+    // older shim exports the block above but predates this symbol - only
+    // host control then reports unavailable).
+    try {
+      linkSendHostControl = _dylib.lookup<NativeFunction<FlutterSkyleLinkSendHostControlNative>>('flutter_skyle_link_send_host_control').asFunction();
+    } catch (_) {
+      linkSendHostControl = null;
     }
   }
 }

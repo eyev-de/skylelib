@@ -106,10 +106,12 @@ static bridge_context* ensure_context(skyle_client* client) {
     }
     ctx->client = client;
     ctx->usb_transport = NULL;
-    /* Route the Skyle Link glue's suspension updates through the shared
-     * fan-out (idempotent re-assignment; mirrors the Android bridge's
-     * get_or_create_context). */
+    /* Route the Skyle Link glue's suspension, host-control, and client
+     * presence updates through the shared fan-out (idempotent re-assignment;
+     * mirrors the Android bridge's get_or_create_context). */
     flutter_skyle_link_glue_set_fanout_hook(flutter_skyle_fanout_dispatch_suspend_state);
+    flutter_skyle_link_glue_set_host_control_fanout_hook(flutter_skyle_fanout_dispatch_host_control);
+    flutter_skyle_link_glue_set_client_presence_fanout_hook(flutter_skyle_fanout_dispatch_link_client);
     register_client_context(client, ctx);
     return ctx;
 }

@@ -14,6 +14,13 @@ struct ContentView: View {
                 Text(vm.connectionLabel)
                     .font(.headline)
                     .foregroundColor(.white)
+                #if os(macOS)
+                if !vm.hostControlNote.isEmpty {
+                    Text(vm.hostControlNote)
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+                #endif
                 Spacer()
                 Text(vm.deviceInfo)
                     .font(.caption)
@@ -28,6 +35,20 @@ struct ContentView: View {
             .pickerStyle(.segmented)
             .frame(maxWidth: 320)
             .onChange(of: vm.selection) { _ in vm.applyStreams() }
+
+            // Skyle Link host controls: fire-and-forget commands to the
+            // hub-hosting Skyle app (only delivered while this app is a link client)
+            #if os(macOS)
+            HStack(spacing: 10) {
+                Toggle("Menu bar", isOn: $vm.hostMenuBarVisible)
+                    .toggleStyle(.button)
+                    .onChange(of: vm.hostMenuBarVisible) { vm.setHostMenuBarVisible($0) }
+                Toggle("Pointer overlay", isOn: $vm.hostPointerVisible)
+                    .toggleStyle(.button)
+                    .onChange(of: vm.hostPointerVisible) { vm.setHostPointerVisible($0) }
+                Button("Calibrate") { vm.startHostCalibration() }
+            }
+            #endif
 
             // Content area
             Group {

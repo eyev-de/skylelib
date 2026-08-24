@@ -139,6 +139,29 @@ typedef void (*dart_suspend_state_callback)(
     void* user_data
 );
 
+/**
+ * Skyle Link host-control callback. ABI parity with the fan-out module only;
+ * never fires on iOS (no Skyle Link supervisor there).
+ */
+typedef void (*dart_host_control_callback)(
+    uint16_t control_id,
+    const uint8_t* value,
+    int32_t value_len,
+    const char* sender_app_id,
+    void* user_data
+);
+
+/**
+ * Skyle Link client presence callback. ABI parity with the fan-out module
+ * only; never fires on iOS (no Skyle Link supervisor there).
+ */
+typedef void (*dart_link_client_callback)(
+    bool connected,
+    const char* app_id,
+    int32_t client_count,
+    void* user_data
+);
+
 // =============================================================================
 // Callback Registration Structure
 // =============================================================================
@@ -160,8 +183,10 @@ typedef struct {
     void* user_data;
     // Appended fields ONLY below this line: the layout above is ABI shared
     // with Dart (FlutterSkyleCallbacks) and the fan-out module - all
-    // definitions must stay field-identical. Unused on iOS (see typedef).
+    // definitions must stay field-identical. Unused on iOS (see typedefs).
     dart_suspend_state_callback on_suspend_state;
+    dart_host_control_callback on_host_control;
+    dart_link_client_callback on_link_client;
 } flutter_skyle_callbacks;
 
 #endif // !TARGET_OS_OSX

@@ -1,5 +1,24 @@
 ## Unreleased
 
+### Added
+
+- Skyle Link host control (extension message 0xFF09): a local-link client
+  commands the hub-hosting app (Skyle X) via `sendHostControl` and the typed
+  helpers `setHostMenuBarVisible` / `setHostPointerVisible` /
+  `startHostCalibration` (fire-and-forget; refused with `false` when this
+  process is the hub owner or not in local-link mode). The hub owner receives
+  the commands on `hostControlStream` and hub client presence
+  (connect/disconnect with the sender app id, the key for its
+  restore-on-disconnect policy) on `linkClientStream`;
+  `flutter_skyle_riverpod` adds the matching `skyleHostControl` and
+  `skyleLinkClients` providers (unseeded - commands/events, not state).
+  Native: `flutter_skyle_callbacks` gained the appended fields
+  `on_host_control` then `on_link_client` (this order is ABI; the Dart and
+  iOS mirrors match), and the link glue exports
+  `flutter_skyle_link_send_host_control`. Requires a skylelib rebuilt with
+  HOST_CONTROL support; against an older native library only the new symbols
+  resolve to null and the send APIs report unavailable.
+
 ### Breaking Changes
 
 - Riverpod providers moved to the new sibling package `flutter_skyle_riverpod`.

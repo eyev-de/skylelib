@@ -124,6 +124,46 @@ internal sealed class MainViewModel : ViewModelBase, IDisposable
     public bool ShowPositioning => IsPositioningSelected;
     public bool ShowVideo => IsVideoSelected;
 
+    // ---- Skyle Link host controls (toggle state is app-local; the commands are
+    // fire-and-forget and only reach a hub-hosting Skyle app while this app is a
+    // link client) ----
+
+    private bool _hostMenuBarVisible = true;
+    public bool HostMenuBarVisible
+    {
+        get => _hostMenuBarVisible;
+        set
+        {
+            if (SetField(ref _hostMenuBarVisible, value))
+                NoteHostControl("Menu bar", _client.SetHostMenuBarVisible(value));
+        }
+    }
+
+    private bool _hostPointerVisible = true;
+    public bool HostPointerVisible
+    {
+        get => _hostPointerVisible;
+        set
+        {
+            if (SetField(ref _hostPointerVisible, value))
+                NoteHostControl("Pointer", _client.SetHostPointerVisible(value));
+        }
+    }
+
+    public void StartHostCalibration()
+        => NoteHostControl("Calibrate", _client.StartHostCalibration());
+
+    private string _hostControlNote = string.Empty;
+
+    private void NoteHostControl(string what, int result)
+    {
+        _hostControlNote = result == (int)SkyleResult.Ok
+            ? $"{what}: sent"
+            : $"{what}: {(SkyleResult)result} (not a link client)";
+        if (_appliedState != (SkyleConnectionState)(-1))
+            UpdateConnectionUi(_appliedState);
+    }
+
     // ---- UI pump ----
 
     private void OnTick(object? sender, EventArgs e)
@@ -172,26 +212,28 @@ internal sealed class MainViewModel : ViewModelBase, IDisposable
 
     private void UpdateConnectionUi(SkyleConnectionState state)
     {
+        string label;
         switch (state)
         {
             case SkyleConnectionState.LinkSynced:
-                ConnectionLabel = "Streaming";
+                label = "Streaming";
                 ConnectionBrush = new SolidColorBrush(Color.FromRgb(0x2E, 0xCC, 0x71)); // green
                 break;
             case SkyleConnectionState.Disconnected:
-                ConnectionLabel = "Disconnected";
+                label = "Disconnected";
                 ConnectionBrush = new SolidColorBrush(Color.FromRgb(0x88, 0x88, 0x88)); // gray
                 DeviceInfo = "No device";
                 break;
             case SkyleConnectionState.Error:
-                ConnectionLabel = "Error";
+                label = "Error";
                 ConnectionBrush = new SolidColorBrush(Color.FromRgb(0xE7, 0x4C, 0x3C)); // red
                 break;
             default:
-                ConnectionLabel = "Connecting…";
+                label = "Connecting…";
                 ConnectionBrush = new SolidColorBrush(Color.FromRgb(0xF1, 0xC4, 0x0F)); // amber
                 break;
         }
+        ConnectionLabel = _hostControlNote.Length > 0 ? $"{label} - {_hostControlNote}" : label;
     }
 
     private static string FormatGaze(GazeSnapshot? g)

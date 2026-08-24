@@ -31,10 +31,29 @@ final class SkyleClient {
         client = c
         setupTransport()   // phase 1 — transport (starts background I/O)
         setupCallbacks()   // phase 2 — message callbacks
+        #if os(macOS)
+        // Skyle Link supervisor (callback-less mode): the app keeps owning the
+        // registered IOKit transport; the supervisor elects OWNER (serve a hub
+        // over it) or CLIENT (share the tracker over a loopback socket) and
+        // stashes / restores the transport across the swaps itself.
+        skyle_link_set_identity("skyle-swiftui-example", UInt8(SKYLE_LINK_TIER_DEFAULT.rawValue), true)
+        skyle_link_set_supervisor_enabled(true)
+        // While on a local link the supervisor owns the connection; a manual
+        // connect would fight it (never force-disconnect while supervised).
+        if !skyle_client_is_local_link(c) {
+            skyle_client_connect(c)
+        }
+        #else
         skyle_client_connect(c)
+        #endif
     }
 
     func stop() {
+        #if os(macOS)
+        // Deliberate supervisor stop first: OWNER hands the hub over, CLIENT
+        // closes the socket - before the transport underneath goes away.
+        skyle_link_set_supervisor_enabled(false)
+        #endif
         if let c = client {
             skyle_client_disconnect(c)
             skyle_client_stop_background(c)
@@ -52,6 +71,36 @@ final class SkyleClient {
     func enableGaze(_ enable: Bool) { if let c = client { skyle_client_enable_gaze(c, enable) } }
     func enablePositioning(_ enable: Bool) { if let c = client { skyle_client_enable_positioning(c, enable) } }
     func enableVideo(_ enable: Bool) { if let c = client { skyle_client_enable_video(c, enable) } }
+
+    // MARK: - Skyle Link host control (macOS only; commands to the hub-hosting Skyle app)
+
+    #if os(macOS)
+    /// Fire-and-forget host-control command over the local link. Returns the raw
+    /// `skyle_result`; `SKYLE_ERROR_INVALID_STATE` means this app is not a link
+    /// client right now (e.g. it owns the tracker itself).
+    @discardableResult
+    func sendHostControl(id: UInt16, value: [UInt8]) -> skyle_result {
+        guard let c = client else { return SKYLE_ERROR_INVALID_STATE }
+        return value.withUnsafeBufferPointer { buf in
+            skyle_link_send_host_control(c, id, buf.baseAddress, UInt16(buf.count))
+        }
+    }
+
+    @discardableResult
+    func setHostMenuBarVisible(_ visible: Bool) -> skyle_result {
+        sendHostControl(id: UInt16(SKYLE_LINK_CONTROL_MENU_BAR.rawValue), value: [visible ? 1 : 0])
+    }
+
+    @discardableResult
+    func setHostPointerVisible(_ visible: Bool) -> skyle_result {
+        sendHostControl(id: UInt16(SKYLE_LINK_CONTROL_POINTER_OVERLAY.rawValue), value: [visible ? 1 : 0])
+    }
+
+    @discardableResult
+    func startHostCalibration() -> skyle_result {
+        sendHostControl(id: UInt16(SKYLE_LINK_CONTROL_START_CALIBRATION.rawValue), value: []) // empty value = app default points
+    }
+    #endif
 
     // MARK: - Transport (platform-specific)
 

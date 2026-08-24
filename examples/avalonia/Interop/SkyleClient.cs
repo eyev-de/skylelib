@@ -88,7 +88,18 @@ internal sealed class SkyleClient : IDisposable
 
         SetupTransport();   // phase 1: transport (starts background I/O thread)
         SetupCallbacks();   // phase 2: message callbacks
-        NativeMethods.skyle_client_connect(_client);
+
+        // Skyle Link supervisor (callback-less mode): the app keeps owning the
+        // registered USB transport; the supervisor elects OWNER (serve a hub over
+        // it) or CLIENT (share the tracker over a loopback socket) and stashes /
+        // restores the transport across the swaps itself.
+        NativeMethods.skyle_link_set_identity("skyle-avalonia-example", 2 /* SKYLE_LINK_TIER_DEFAULT */, true);
+        NativeMethods.skyle_link_set_supervisor_enabled(true);
+
+        // While on a local link the supervisor owns the connection; a manual
+        // connect would fight it (never force-disconnect while supervised).
+        if (!NativeMethods.skyle_client_is_local_link(_client))
+            NativeMethods.skyle_client_connect(_client);
     }
 
     private void SetupTransport()
@@ -175,6 +186,29 @@ internal sealed class SkyleClient : IDisposable
         try { action(); } catch { /* best-effort streaming toggles */ }
     }
 
+    // ---- Skyle Link host control (commands to the hub-hosting Skyle app) ----
+
+    /// <summary>
+    /// Fire-and-forget host-control command over the local link. Returns the raw
+    /// <c>skyle_result</c>; <see cref="SkyleResult.InvalidState"/> means this app
+    /// is not a link client right now (e.g. it owns the tracker itself).
+    /// </summary>
+    public int SendHostControl(ushort controlId, byte[]? value)
+    {
+        if (_client == IntPtr.Zero || _disposed) return (int)SkyleResult.InvalidState;
+        try { return NativeMethods.skyle_link_send_host_control(_client, controlId, value, (ushort)(value?.Length ?? 0)); }
+        catch { return (int)SkyleResult.Communication; }
+    }
+
+    public int SetHostMenuBarVisible(bool visible)
+        => SendHostControl((ushort)SkyleLinkHostControl.MenuBar, new[] { visible ? (byte)1 : (byte)0 });
+
+    public int SetHostPointerVisible(bool visible)
+        => SendHostControl((ushort)SkyleLinkHostControl.PointerOverlay, new[] { visible ? (byte)1 : (byte)0 });
+
+    public int StartHostCalibration()
+        => SendHostControl((ushort)SkyleLinkHostControl.StartCalibration, null); // empty value = app default points
+
     // ---- native callbacks (run on the library's background I/O thread) ----
 
     private void OnGaze(IntPtr client, IntPtr gaze, IntPtr user)
@@ -247,6 +281,10 @@ internal sealed class SkyleClient : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        // Deliberate supervisor stop first: OWNER hands the hub over, CLIENT
+        // closes the socket - before the transport underneath goes away.
+        try { NativeMethods.skyle_link_set_supervisor_enabled(false); } catch { /* ignore */ }
 
         if (_client != IntPtr.Zero)
         {

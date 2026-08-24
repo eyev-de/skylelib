@@ -227,6 +227,49 @@ typedef void (*dart_logging_callback)(
     void* user_data
 );
 
+/**
+ * Skyle Link host-control callback - a HOST_CONTROL command received by the
+ * hub this process serves (hub owner only; a local-link client sends, never
+ * receives). Fed from the link glue's host-control hook via
+ * flutter_skyle_fanout_dispatch_host_control().
+ * @param control_id    Which control (skyle_link_host_control; unknown ids
+ *                      pass through - the receiver decides what to ignore)
+ * @param value         Heap-allocated copy of the raw value bytes, or NULL
+ *                      when value_len is 0. Dart MUST free it with
+ *                      flutter_skyle_free() after reading.
+ * @param value_len     Length of value in bytes
+ * @param sender_app_id Heap-allocated UTF-8 copy of the sending app's id, or
+ *                      NULL when unknown. Dart MUST free it with
+ *                      flutter_skyle_free() after reading.
+ * @param user_data     User data pointer
+ */
+typedef void (*dart_host_control_callback)(
+    uint16_t control_id,
+    const uint8_t* value,
+    int32_t value_len,
+    const char* sender_app_id,
+    void* user_data
+);
+
+/**
+ * Skyle Link client presence callback - a client connected to / disconnected
+ * from the hub this process serves (hub owner only; the input for a
+ * restore-on-disconnect policy keyed on app_id). Fed from the link glue's
+ * presence hook via flutter_skyle_fanout_dispatch_link_client().
+ * @param connected    True on CLIENT_CONNECTED, false on CLIENT_DISCONNECTED
+ * @param app_id       Heap-allocated UTF-8 copy of the client's app id, or
+ *                     NULL when unknown. Dart MUST free it with
+ *                     flutter_skyle_free() after reading.
+ * @param client_count Number of connected clients after the change
+ * @param user_data    User data pointer
+ */
+typedef void (*dart_link_client_callback)(
+    bool connected,
+    const char* app_id,
+    int32_t client_count,
+    void* user_data
+);
+
 // =============================================================================
 // Callback Registration Structure
 // =============================================================================
@@ -253,6 +296,8 @@ typedef struct {
     // with Dart (FlutterSkyleCallbacks in skyle_client_bindings.dart) and the
     // darwin bridge's iOS branch - all definitions must stay field-identical.
     dart_suspend_state_callback on_suspend_state;  // Skyle Link suspension fan-out
+    dart_host_control_callback on_host_control;    // Skyle Link HOST_CONTROL fan-out (hub owner only)
+    dart_link_client_callback on_link_client;      // Skyle Link client presence fan-out (hub owner only)
 } flutter_skyle_callbacks;
 
 /** Maximum number of concurrent callback subscribers (Flutter engines). */
@@ -347,6 +392,26 @@ void flutter_skyle_fanout_clear(skyle_client* client);
  * via flutter_skyle_free), same as the other string payloads.
  */
 void flutter_skyle_fanout_dispatch_suspend_state(bool suspended, const char* holder);
+
+/**
+ * Fan a Skyle Link HOST_CONTROL command out to every registered subscriber's
+ * on_host_control. Signature-compatible with the link glue's host-control
+ * hook (flutter_skyle_link_glue_set_host_control_fanout_hook) - each bridge
+ * registers this function at context creation. `value` and `sender_app_id`
+ * are valid only during the call; heap copies are delivered per subscriber
+ * (each Dart isolate frees its own via flutter_skyle_free), same as the
+ * other heap payloads.
+ */
+void flutter_skyle_fanout_dispatch_host_control(uint16_t control_id, const uint8_t* value, uint16_t value_len, const char* sender_app_id);
+
+/**
+ * Fan a Skyle Link hub client presence change out to every registered
+ * subscriber's on_link_client. Signature-compatible with the link glue's
+ * presence hook (flutter_skyle_link_glue_set_client_presence_fanout_hook).
+ * `app_id` is valid only during the call; a strdup'd copy is delivered per
+ * subscriber (each Dart isolate frees its own via flutter_skyle_free).
+ */
+void flutter_skyle_fanout_dispatch_link_client(bool connected, const char* app_id, int client_count);
 
 /**
  * Last error message captured by the module's on_error adapter, or NULL when
