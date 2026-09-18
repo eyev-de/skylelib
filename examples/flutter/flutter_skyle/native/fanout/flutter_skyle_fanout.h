@@ -270,6 +270,29 @@ typedef void (*dart_link_client_callback)(
     void* user_data
 );
 
+/**
+ * Skyle Link host-state callback - the hub-hosting app's published state of
+ * one control (HOST_STATE, spec section 8.2), received while this process is
+ * a local-link CLIENT. Fed from the link glue's host-state hook via
+ * flutter_skyle_fanout_dispatch_host_state(). Fires on actual changes only
+ * (once per control when it first becomes known after connect), and with
+ * value_len -1 when the state became unknown again (the link to the hub is
+ * gone).
+ * @param control_id Which control (skyle_link_host_control; unknown ids pass
+ *                   through - the receiver decides what to ignore)
+ * @param value      Heap-allocated copy of the value bytes, or NULL when
+ *                   value_len <= 0. Dart MUST free it with flutter_skyle_free()
+ *                   after reading.
+ * @param value_len  Length of value in bytes; -1 = unknown / cleared
+ * @param user_data  User data pointer
+ */
+typedef void (*dart_host_state_callback)(
+    uint16_t control_id,
+    const uint8_t* value,
+    int32_t value_len,
+    void* user_data
+);
+
 // =============================================================================
 // Callback Registration Structure
 // =============================================================================
@@ -298,6 +321,7 @@ typedef struct {
     dart_suspend_state_callback on_suspend_state;  // Skyle Link suspension fan-out
     dart_host_control_callback on_host_control;    // Skyle Link HOST_CONTROL fan-out (hub owner only)
     dart_link_client_callback on_link_client;      // Skyle Link client presence fan-out (hub owner only)
+    dart_host_state_callback on_host_state;        // Skyle Link HOST_STATE fan-out (link client only)
 } flutter_skyle_callbacks;
 
 /** Maximum number of concurrent callback subscribers (Flutter engines). */
@@ -412,6 +436,15 @@ void flutter_skyle_fanout_dispatch_host_control(uint16_t control_id, const uint8
  * subscriber (each Dart isolate frees its own via flutter_skyle_free).
  */
 void flutter_skyle_fanout_dispatch_link_client(bool connected, const char* app_id, int client_count);
+
+/**
+ * Fan a Skyle Link HOST_STATE change out to every registered subscriber's
+ * on_host_state. Signature-compatible with the link glue's host-state hook
+ * (flutter_skyle_link_glue_set_host_state_fanout_hook). `value` is valid only
+ * during the call; a heap copy is delivered per subscriber (NULL when
+ * value_len <= 0; value_len -1 = the state became unknown).
+ */
+void flutter_skyle_fanout_dispatch_host_state(uint16_t control_id, const uint8_t* value, int32_t value_len);
 
 /**
  * Last error message captured by the module's on_error adapter, or NULL when

@@ -17,6 +17,9 @@ final class SkyleViewModel: ObservableObject {
     @Published var hostMenuBarVisible = true
     @Published var hostPointerVisible = true
     @Published var hostControlNote = ""
+    // What the hub-hosting Skyle app reports back (HOST_STATE); nil = unknown.
+    @Published var hostMenuBarReported: Bool?
+    @Published var hostPointerReported: Bool?
     #endif
 
     private let client = SkyleClient()
@@ -43,6 +46,11 @@ final class SkyleViewModel: ObservableObject {
             let info = firmware.isEmpty ? "Skyle · SN \(serial)" : "Skyle · FW \(firmware) · SN \(serial)"
             DispatchQueue.main.async { self?.deviceInfo = info }
         }
+        #if os(macOS)
+        client.onHostVisibility = { [weak self] controlId, visible in
+            DispatchQueue.main.async { self?.applyHostVisibility(controlId: controlId, visible: visible) }
+        }
+        #endif
         client.start()
     }
 
@@ -78,10 +86,35 @@ final class SkyleViewModel: ObservableObject {
             ? "\(what): sent"
             : "\(what): refused (\(result.rawValue), not a link client)"
     }
+
+    private func applyHostVisibility(controlId: UInt16, visible: Bool?) {
+        switch controlId {
+        case UInt16(SKYLE_LINK_CONTROL_MENU_BAR.rawValue): hostMenuBarReported = visible
+        case UInt16(SKYLE_LINK_CONTROL_POINTER_OVERLAY.rawValue): hostPointerReported = visible
+        default: break
+        }
+    }
+
+    /// Re-read both host visibilities (the library reports unknown as soon as
+    /// the link to the hub is gone, without a callback).
+    private func syncHostVisibility() {
+        let menu = UInt16(SKYLE_LINK_CONTROL_MENU_BAR.rawValue)
+        let pointer = UInt16(SKYLE_LINK_CONTROL_POINTER_OVERLAY.rawValue)
+        applyHostVisibility(controlId: menu, visible: client.hostVisibility(id: menu))
+        applyHostVisibility(controlId: pointer, visible: client.hostVisibility(id: pointer))
+    }
+
+    var hostVisibilityNote: String {
+        func word(_ v: Bool?) -> String { v == nil ? "unknown" : v! ? "visible" : "hidden" }
+        return "Host reports: menu bar \(word(hostMenuBarReported)), pointer \(word(hostPointerReported))"
+    }
     #endif
 
     private func handleState(_ s: skyle_connection_state) {
         state = s
+        #if os(macOS)
+        syncHostVisibility() // the link may have died with this edge
+        #endif
         switch s {
         case SKYLE_STATE_LINK_SYNCED:
             connectionLabel = "Streaming"

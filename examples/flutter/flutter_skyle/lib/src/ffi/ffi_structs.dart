@@ -248,6 +248,24 @@ final class SkyleSetDisplayInfo extends Struct {
   external SkyleSizef sizeMm;     // 8 bytes
 }
 
+/// Set host info message (matches skyle_set_host_info: 1 + 64 bytes)
+/// App -> Device; type 0x00E3. The wire payload is built natively
+/// (type + 2-byte model length + model bytes).
+final class SkyleSetHostInfo extends Struct {
+  @Uint8()
+  external int deviceType; // skyle_host_device_type
+
+  @Array(64)
+  external Array<Uint8> model; // NUL-terminated UTF-8, SKYLE_SET_HOST_INFO_MODEL_MAX (63) + terminator
+}
+
+/// Set tracking power mode message (1 byte payload, matches skyle_set_tracking_power_mode)
+/// App -> Device; type 0x00E4.
+final class SkyleSetTrackingPowerMode extends Struct {
+  @Uint8()
+  external int tier; // skyle_tracking_power_tier
+}
+
 // =============================================================================
 // Calibration Messages (from calibration_messages.h)
 // =============================================================================

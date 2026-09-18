@@ -2,6 +2,49 @@
 
 ### Added
 
+- `SkyleControl.sendHostInfo(HostInfo)` / `hostInfo`: tell the device which
+  tablet family the app runs on (`HostDeviceType`: iPad, iPad mini, iPad Air,
+  iPad Pro, Android tablet, Windows tablet, unknown) plus the platform model
+  id. The device picks its camera power tier from it (iPad Pro tracks at
+  60 fps, everything else at 30 fps) and forgets it when the session ends, so
+  the value is cached and re-sent on every link-up like display info. Wire:
+  new EAP message `SetHostInfo` (0x00E3). Native: bridges export
+  `flutter_skyle_send_host_info`; requires a skylelib with
+  `skyle_client_send_host_info` (a release newer than 2.1.0).
+
+- `SkyleControl.sendTrackingPowerMode(TrackingPowerTier)` / `trackingPowerTier`:
+  ask the device for an explicit camera frame-rate tier (`ultraLow` 20 fps,
+  `low` 30 fps, `medium` 40, `high` 50, `ultraHigh` 60; `defaultTier` hands
+  the choice back to the host-info policy). Overrides the tier the device
+  derives from `sendHostInfo` until the session ends, so the value is cached
+  and re-sent on every link-up like host info. Wire: new EAP message
+  `SetTrackingPowerMode` (0x00E4, 1 byte). Native: bridges export
+  `flutter_skyle_send_tracking_power_mode`; requires a skylelib with
+  `skyle_client_send_tracking_power_mode`.
+
+- `SkyleControl.hasReceivedControl`: true once the device has pushed its
+  control state in the current link session (resets on link loss), so a late
+  subscriber can tell a device-fresh `controlData` from the pre-push default.
+
+- Skyle Link host state read-back (extension message 0xFF0A, HOST_STATE): link
+  clients see what the hub-hosting app (Skyle X) actually shows via
+  `hostVisibilityStream` / `hostVisibility(id)` /
+  `isHostMenuBarVisible` / `isHostPointerVisible` (null = unknown) and the
+  generic `hostStateStream` / `hostState(id)`; `hubSupportsHostState` tells an
+  unknown that will resolve from one that never will. The hosting app publishes
+  its real state with `publishMenuBarVisibility` / `publishPointerVisibility`
+  (generic `publishHostState`) - process-wide and mode independent, so it can
+  be called at startup before the supervisor has elected an owner.
+  `flutter_skyle_riverpod` adds `skyleHostVisibilityProvider(controlId)`
+  (seeded, `bool?`). Native: `flutter_skyle_callbacks` gained the appended
+  field `on_host_state` (after `on_link_client`; ABI order, Dart and iOS
+  mirrors match) and the link glue exports `flutter_skyle_link_get_host_state`,
+  `flutter_skyle_link_get_host_visibility`,
+  `flutter_skyle_link_publish_host_state`,
+  `flutter_skyle_link_get_hub_capabilities`. Requires skylelib with HOST_STATE
+  support (Skyle Link protocol 1.2); against an older library the new symbols
+  resolve to null and visibility stays unknown.
+
 - Skyle Link host control (extension message 0xFF09): a local-link client
   commands the hub-hosting app (Skyle X) via `sendHostControl` and the typed
   helpers `setHostMenuBarVisible` / `setHostPointerVisible` /

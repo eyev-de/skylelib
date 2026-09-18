@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `skyleControlDataStreamProvider` is seeded with the client's cached control
+  state when the device already pushed it in the current link session. A
+  provider created after that push (the device only pushes on enable and on
+  changes) no longer sits in loading until the next change.
+
 ## 1.0.0
 
 Initial release, split out of `flutter_skyle`.

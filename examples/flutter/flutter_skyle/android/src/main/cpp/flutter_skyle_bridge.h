@@ -200,6 +200,24 @@ int flutter_skyle_send_control(skyle_client* client, const skyle_control_message
 int flutter_skyle_send_display_info(skyle_client* client, const skyle_set_display_info* info);
 
 /**
+ * Send host info (tablet family + model id) so the device can pick its camera
+ * power tier. App -> Device, fire-and-forget; resend after every link-up.
+ * @param client Client pointer
+ * @param info Host info
+ * @return 0 on success, negative error code on failure
+ */
+int flutter_skyle_send_host_info(skyle_client* client, const skyle_set_host_info* info);
+
+/**
+ * Send an explicit tracking power mode (camera fps tier); overrides the
+ * host-info-derived tier for the session
+ * @param client Client pointer
+ * @param mode Tracking power mode
+ * @return 0 on success, negative error code on failure
+ */
+int flutter_skyle_send_tracking_power_mode(skyle_client* client, const skyle_set_tracking_power_mode* mode);
+
+/**
  * Start calibration
  * @param client Client pointer
  * @param config Calibration configuration

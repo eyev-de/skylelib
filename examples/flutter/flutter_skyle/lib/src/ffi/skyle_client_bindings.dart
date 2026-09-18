@@ -53,6 +53,12 @@ typedef DartHostControlCallback = Void Function(Uint16 controlId, Pointer<Uint8>
 // flutter_skyle_free.
 typedef DartLinkClientCallback = Void Function(Bool connected, Pointer<Utf8> appId, Int32 clientCount, Pointer<Void> userData);
 
+// Skyle Link: the hub-hosting app's published state of one control changed
+// (HOST_STATE; delivered to link clients only). `value` is a heap-allocated
+// copy that Dart must free with flutter_skyle_free (nullptr when valueLen <= 0);
+// valueLen -1 means the state became unknown (link to the hub gone).
+typedef DartHostStateCallback = Void Function(Uint16 controlId, Pointer<Uint8> value, Int32 valueLen, Pointer<Void> userData);
+
 // =============================================================================
 // Callbacks Structure (matches flutter_skyle_callbacks from C)
 // =============================================================================
@@ -86,6 +92,10 @@ final class FlutterSkyleCallbacks extends Struct {
   // onSuspendState they never fire on iOS.
   external Pointer<NativeFunction<DartHostControlCallback>> onHostControl;
   external Pointer<NativeFunction<DartLinkClientCallback>> onLinkClient;
+
+  // onHostState (appended after onLinkClient - order is ABI): HOST_STATE
+  // changes, delivered while this process is a link client; never fires on iOS.
+  external Pointer<NativeFunction<DartHostStateCallback>> onHostState;
 }
 
 // =============================================================================
@@ -154,6 +164,12 @@ typedef FlutterSkyleSendControl = int Function(Pointer<SkyleClientNative> client
 typedef FlutterSkyleSendDisplayInfoNative = Int32 Function(Pointer<SkyleClientNative> client, Pointer<SkyleSetDisplayInfo> info);
 typedef FlutterSkyleSendDisplayInfo = int Function(Pointer<SkyleClientNative> client, Pointer<SkyleSetDisplayInfo> info);
 
+typedef FlutterSkyleSendHostInfoNative = Int32 Function(Pointer<SkyleClientNative> client, Pointer<SkyleSetHostInfo> info);
+typedef FlutterSkyleSendHostInfo = int Function(Pointer<SkyleClientNative> client, Pointer<SkyleSetHostInfo> info);
+
+typedef FlutterSkyleSendTrackingPowerModeNative = Int32 Function(Pointer<SkyleClientNative> client, Pointer<SkyleSetTrackingPowerMode> mode);
+typedef FlutterSkyleSendTrackingPowerMode = int Function(Pointer<SkyleClientNative> client, Pointer<SkyleSetTrackingPowerMode> mode);
+
 // USB data feeding functions REMOVED - now handled by Kotlin via JNI callbacks
 // feedUsbData, getPendingWrite, clearPendingWrite no longer exist
 
@@ -204,6 +220,22 @@ typedef FlutterSkyleGetSuspensionState = void Function(Pointer<Bool> suspended, 
 typedef FlutterSkyleLinkSendHostControlNative = Int32 Function(Pointer<SkyleClientNative> client, Uint16 controlId, Pointer<Uint8> value, Uint16 valueLen);
 typedef FlutterSkyleLinkSendHostControl = int Function(Pointer<SkyleClientNative> client, int controlId, Pointer<Uint8> value, int valueLen);
 
+// HOST_STATE read-back (link client): full value length >= 0, or -1 when unknown.
+typedef FlutterSkyleLinkGetHostStateNative = Int32 Function(Pointer<SkyleClientNative> client, Uint16 controlId, Pointer<Uint8> value, Uint16 valueCap);
+typedef FlutterSkyleLinkGetHostState = int Function(Pointer<SkyleClientNative> client, int controlId, Pointer<Uint8> value, int valueCap);
+
+// 1 visible, 0 hidden, -1 unknown.
+typedef FlutterSkyleLinkGetHostVisibilityNative = Int32 Function(Pointer<SkyleClientNative> client, Uint16 controlId);
+typedef FlutterSkyleLinkGetHostVisibility = int Function(Pointer<SkyleClientNative> client, int controlId);
+
+// Hosting-app side publish (process-wide, mode independent); skyle_result.
+typedef FlutterSkyleLinkPublishHostStateNative = Int32 Function(Uint16 controlId, Pointer<Uint8> value, Uint16 valueLen);
+typedef FlutterSkyleLinkPublishHostState = int Function(int controlId, Pointer<Uint8> value, int valueLen);
+
+// HELLO_ACK capability bits of the linked hub; 0 when not a link client.
+typedef FlutterSkyleLinkGetHubCapabilitiesNative = Uint32 Function(Pointer<SkyleClientNative> client);
+typedef FlutterSkyleLinkGetHubCapabilities = int Function(Pointer<SkyleClientNative> client);
+
 
 // =============================================================================
 // Bindings Class
@@ -227,6 +259,8 @@ class SkyleClientBindings {
   late final FlutterSkyleEnableStream enableControl;
   late final FlutterSkyleSendControl sendControl;
   late final FlutterSkyleSendDisplayInfo sendDisplayInfo;
+  late final FlutterSkyleSendHostInfo sendHostInfo;
+  late final FlutterSkyleSendTrackingPowerMode sendTrackingPowerMode;
   late final FlutterSkyleStartCalibration startCalibration;
   late final FlutterSkyleCollectCalibrationPoints collectCalibrationPoints;
   late final FlutterSkyleAbortCalibration abortCalibration;
@@ -258,6 +292,13 @@ class SkyleClientBindings {
   /// Skyle Link symbols but predates HOST_CONTROL support).
   late final FlutterSkyleLinkSendHostControl? linkSendHostControl;
 
+  /// HOST_STATE symbols (separate lookup: a shim may export host-control
+  /// send but predate host-state read-back / publish).
+  late final FlutterSkyleLinkGetHostState? linkGetHostState;
+  late final FlutterSkyleLinkGetHostVisibility? linkGetHostVisibility;
+  late final FlutterSkyleLinkPublishHostState? linkPublishHostState;
+  late final FlutterSkyleLinkGetHubCapabilities? linkGetHubCapabilities;
+
   /// Native function pointer for flutter_skyle_free, suitable for
   /// [NativeFinalizer] / [Pointer.asTypedList] finalizer parameter.
   late final Pointer<NativeFinalizerFunction>? nativeFreeFinalizer;
@@ -288,6 +329,10 @@ class SkyleClientBindings {
     sendControl = _dylib.lookup<NativeFunction<FlutterSkyleSendControlNative>>('flutter_skyle_send_control').asFunction();
 
     sendDisplayInfo = _dylib.lookup<NativeFunction<FlutterSkyleSendDisplayInfoNative>>('flutter_skyle_send_display_info').asFunction();
+
+    sendHostInfo = _dylib.lookup<NativeFunction<FlutterSkyleSendHostInfoNative>>('flutter_skyle_send_host_info').asFunction();
+
+    sendTrackingPowerMode = _dylib.lookup<NativeFunction<FlutterSkyleSendTrackingPowerModeNative>>('flutter_skyle_send_tracking_power_mode').asFunction();
 
     startCalibration = _dylib.lookup<NativeFunction<FlutterSkyleStartCalibrationNative>>('flutter_skyle_start_calibration').asFunction();
 
@@ -365,6 +410,20 @@ class SkyleClientBindings {
       linkSendHostControl = _dylib.lookup<NativeFunction<FlutterSkyleLinkSendHostControlNative>>('flutter_skyle_link_send_host_control').asFunction();
     } catch (_) {
       linkSendHostControl = null;
+    }
+
+    // HOST_STATE (own try block: an older shim may export host-control send
+    // but predate the state read-back / publish symbols).
+    try {
+      linkGetHostState = _dylib.lookup<NativeFunction<FlutterSkyleLinkGetHostStateNative>>('flutter_skyle_link_get_host_state').asFunction();
+      linkGetHostVisibility = _dylib.lookup<NativeFunction<FlutterSkyleLinkGetHostVisibilityNative>>('flutter_skyle_link_get_host_visibility').asFunction();
+      linkPublishHostState = _dylib.lookup<NativeFunction<FlutterSkyleLinkPublishHostStateNative>>('flutter_skyle_link_publish_host_state').asFunction();
+      linkGetHubCapabilities = _dylib.lookup<NativeFunction<FlutterSkyleLinkGetHubCapabilitiesNative>>('flutter_skyle_link_get_hub_capabilities').asFunction();
+    } catch (_) {
+      linkGetHostState = null;
+      linkGetHostVisibility = null;
+      linkPublishHostState = null;
+      linkGetHubCapabilities = null;
     }
   }
 }

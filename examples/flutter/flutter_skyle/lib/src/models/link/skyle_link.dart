@@ -84,6 +84,61 @@ abstract final class SkyleLinkHostControlId {
   /// Optional u8 point count (absent/0 = app default, else 5 or 9). Brings
   /// the hub-hosting app to the foreground and starts a calibration.
   static const int startCalibration = 3;
+
+  /// True for the controls whose value (command and state alike) is a single
+  /// u8 visible byte: [menuBar] and [pointerOverlay].
+  static bool isVisibilityControl(int controlId) => controlId == menuBar || controlId == pointerOverlay;
+}
+
+/// The hub-hosting app's published state of one control (HOST_STATE), as seen
+/// by a local-link client. Only the hosting app's own reports count - the hub
+/// never infers state from the commands it forwards, so this reflects what
+/// Skyle X actually shows (after applying, refusing, or restoring a command,
+/// or after the user changed it in Skyle X itself).
+class SkyleLinkHostState {
+  const SkyleLinkHostState({required this.controlId, required this.value});
+
+  /// Which control ([SkyleLinkHostControlId]; unknown ids pass through).
+  final int controlId;
+
+  /// Raw value bytes (layout per control id, append-only). Null when the
+  /// state is unknown: not a link client, the hub predates HOST_STATE,
+  /// nothing reported yet, or the link to the hub died.
+  final Uint8List? value;
+
+  bool get isKnown => value != null;
+
+  /// u8 visible interpretation for the visibility controls; null when
+  /// unknown or when the value carries no byte.
+  bool? get visible {
+    final v = value;
+    if (v == null || v.isEmpty) return null;
+    return v[0] != 0;
+  }
+
+  @override
+  String toString() => 'SkyleLinkHostState(controlId: $controlId, value: $value)';
+}
+
+/// Visibility of one hub-hosting app overlay ([SkyleLinkHostControlId.menuBar]
+/// or [SkyleLinkHostControlId.pointerOverlay]) as reported by that app.
+class SkyleLinkHostVisibility {
+  const SkyleLinkHostVisibility({required this.controlId, required this.visible});
+
+  /// Which overlay.
+  final int controlId;
+
+  /// True visible, false hidden, null unknown (see [SkyleLinkHostState.value]).
+  final bool? visible;
+
+  @override
+  bool operator ==(Object other) => other is SkyleLinkHostVisibility && other.controlId == controlId && other.visible == visible;
+
+  @override
+  int get hashCode => Object.hash(controlId, visible);
+
+  @override
+  String toString() => 'SkyleLinkHostVisibility(controlId: $controlId, visible: $visible)';
 }
 
 /// A fire-and-forget HOST_CONTROL command received by the hub this process

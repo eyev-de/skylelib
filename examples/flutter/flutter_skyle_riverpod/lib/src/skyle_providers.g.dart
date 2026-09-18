@@ -763,6 +763,105 @@ final class SkyleLinkClientsProvider
 
 String _$skyleLinkClientsHash() => r'c715e58dd9ffad65144f626a6545d3a911da5f8f';
 
+/// Stream provider for the hub-hosting app's reported visibility of one
+/// overlay ([SkyleLinkHostControlId.menuBar] / [SkyleLinkHostControlId.pointerOverlay])
+/// while this process is a link client: true visible, false hidden, null
+/// unknown. Seeded with the current native cached value, then follows every
+/// change; returns to null when the link to the hub is gone.
+
+@ProviderFor(skyleHostVisibility)
+final skyleHostVisibilityProvider = SkyleHostVisibilityFamily._();
+
+/// Stream provider for the hub-hosting app's reported visibility of one
+/// overlay ([SkyleLinkHostControlId.menuBar] / [SkyleLinkHostControlId.pointerOverlay])
+/// while this process is a link client: true visible, false hidden, null
+/// unknown. Seeded with the current native cached value, then follows every
+/// change; returns to null when the link to the hub is gone.
+
+final class SkyleHostVisibilityProvider
+    extends $FunctionalProvider<AsyncValue<bool?>, bool?, Stream<bool?>>
+    with $FutureModifier<bool?>, $StreamProvider<bool?> {
+  /// Stream provider for the hub-hosting app's reported visibility of one
+  /// overlay ([SkyleLinkHostControlId.menuBar] / [SkyleLinkHostControlId.pointerOverlay])
+  /// while this process is a link client: true visible, false hidden, null
+  /// unknown. Seeded with the current native cached value, then follows every
+  /// change; returns to null when the link to the hub is gone.
+  SkyleHostVisibilityProvider._({
+    required SkyleHostVisibilityFamily super.from,
+    required int super.argument,
+  }) : super(
+         retry: null,
+         name: r'skyleHostVisibilityProvider',
+         isAutoDispose: false,
+         dependencies: null,
+         $allTransitiveDependencies: null,
+       );
+
+  @override
+  String debugGetCreateSourceHash() => _$skyleHostVisibilityHash();
+
+  @override
+  String toString() {
+    return r'skyleHostVisibilityProvider'
+        ''
+        '($argument)';
+  }
+
+  @$internal
+  @override
+  $StreamProviderElement<bool?> $createElement($ProviderPointer pointer) =>
+      $StreamProviderElement(pointer);
+
+  @override
+  Stream<bool?> create(Ref ref) {
+    final argument = this.argument as int;
+    return skyleHostVisibility(ref, argument);
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is SkyleHostVisibilityProvider && other.argument == argument;
+  }
+
+  @override
+  int get hashCode {
+    return argument.hashCode;
+  }
+}
+
+String _$skyleHostVisibilityHash() =>
+    r'69039ffe66f695b90754670c3e220d4042bb20ed';
+
+/// Stream provider for the hub-hosting app's reported visibility of one
+/// overlay ([SkyleLinkHostControlId.menuBar] / [SkyleLinkHostControlId.pointerOverlay])
+/// while this process is a link client: true visible, false hidden, null
+/// unknown. Seeded with the current native cached value, then follows every
+/// change; returns to null when the link to the hub is gone.
+
+final class SkyleHostVisibilityFamily extends $Family
+    with $FunctionalFamilyOverride<Stream<bool?>, int> {
+  SkyleHostVisibilityFamily._()
+    : super(
+        retry: null,
+        name: r'skyleHostVisibilityProvider',
+        dependencies: null,
+        $allTransitiveDependencies: null,
+        isAutoDispose: false,
+      );
+
+  /// Stream provider for the hub-hosting app's reported visibility of one
+  /// overlay ([SkyleLinkHostControlId.menuBar] / [SkyleLinkHostControlId.pointerOverlay])
+  /// while this process is a link client: true visible, false hidden, null
+  /// unknown. Seeded with the current native cached value, then follows every
+  /// change; returns to null when the link to the hub is gone.
+
+  SkyleHostVisibilityProvider call(int controlId) =>
+      SkyleHostVisibilityProvider._(argument: controlId, from: this);
+
+  @override
+  String toString() => r'skyleHostVisibilityProvider';
+}
+
 /// Current connection state (from stream)
 
 @ProviderFor(skyleConnectionState)
@@ -811,12 +910,20 @@ final class SkyleConnectionStateProvider
 String _$skyleConnectionStateHash() =>
     r'463ac5fd0e42578e8d91ba4b86e52ef3b08fc3c4';
 
-/// Stream provider for control data
+/// Stream provider for control data. The device pushes control state only on
+/// a control-stream enable and on changes, so a subscriber created after that
+/// push would otherwise sit in loading until the next change. Seeded with the
+/// client's cached state when the device has already pushed it in the current
+/// link session (never with the pre-push default), then follows every push.
 
 @ProviderFor(skyleControlDataStream)
 final skyleControlDataStreamProvider = SkyleControlDataStreamProvider._();
 
-/// Stream provider for control data
+/// Stream provider for control data. The device pushes control state only on
+/// a control-stream enable and on changes, so a subscriber created after that
+/// push would otherwise sit in loading until the next change. Seeded with the
+/// client's cached state when the device has already pushed it in the current
+/// link session (never with the pre-push default), then follows every push.
 
 final class SkyleControlDataStreamProvider
     extends
@@ -826,7 +933,11 @@ final class SkyleControlDataStreamProvider
           Stream<ControlData>
         >
     with $FutureModifier<ControlData>, $StreamProvider<ControlData> {
-  /// Stream provider for control data
+  /// Stream provider for control data. The device pushes control state only on
+  /// a control-stream enable and on changes, so a subscriber created after that
+  /// push would otherwise sit in loading until the next change. Seeded with the
+  /// client's cached state when the device has already pushed it in the current
+  /// link session (never with the pre-push default), then follows every push.
   SkyleControlDataStreamProvider._()
     : super(
         from: null,
@@ -854,7 +965,7 @@ final class SkyleControlDataStreamProvider
 }
 
 String _$skyleControlDataStreamHash() =>
-    r'87b3b907e614ee21563c2f683ce08ea399231b50';
+    r'a54fa31161c4523136d5df8b1c9644d9656205cd';
 
 /// Current control data
 

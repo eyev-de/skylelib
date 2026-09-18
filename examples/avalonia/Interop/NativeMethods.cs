@@ -84,6 +84,8 @@ internal static class NativeMethods
     [DllImport(Lib)] public static extern int skyle_link_get_supervisor_mode();
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] public static extern bool skyle_client_is_local_link(IntPtr client);
     [DllImport(Lib)] public static extern int skyle_link_send_host_control(IntPtr client, ushort controlId, byte[]? value, ushort valueLen);
+    [DllImport(Lib)] public static extern int skyle_link_set_host_visibility_callback(IntPtr client, IntPtr callback, IntPtr userData);
+    [DllImport(Lib)] public static extern int skyle_link_get_host_visibility(IntPtr client, ushort controlId, [MarshalAs(UnmanagedType.U1)] out bool visible);
 
     // ---- macOS IOKit transport ----
 

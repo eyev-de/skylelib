@@ -112,6 +112,7 @@ static bridge_context* ensure_context(skyle_client* client) {
     flutter_skyle_link_glue_set_fanout_hook(flutter_skyle_fanout_dispatch_suspend_state);
     flutter_skyle_link_glue_set_host_control_fanout_hook(flutter_skyle_fanout_dispatch_host_control);
     flutter_skyle_link_glue_set_client_presence_fanout_hook(flutter_skyle_fanout_dispatch_link_client);
+    flutter_skyle_link_glue_set_host_state_fanout_hook(flutter_skyle_fanout_dispatch_host_state);
     register_client_context(client, ctx);
     return ctx;
 }
@@ -476,6 +477,22 @@ int flutter_skyle_send_display_info(skyle_client* client, const skyle_set_displa
     LOGD("flutter_skyle_send_display_info: %ux%upx %.1fx%.1fmm (%d)",
          info->resolution.width, info->resolution.height,
          info->size_mm.width, info->size_mm.height, result);
+    return result;
+}
+
+int flutter_skyle_send_host_info(skyle_client* client, const skyle_set_host_info* info) {
+    if (!client || !info) return -1;
+    skyle_result result = skyle_client_send_host_info(client, info);
+    LOGD("flutter_skyle_send_host_info: %s '%s' (%d)",
+         skyle_host_device_type_name((skyle_host_device_type)info->device_type), info->model, result);
+    return result;
+}
+
+int flutter_skyle_send_tracking_power_mode(skyle_client* client, const skyle_set_tracking_power_mode* mode) {
+    if (!client || !mode) return -1;
+    skyle_result result = skyle_client_send_tracking_power_mode(client, mode);
+    LOGD("flutter_skyle_send_tracking_power_mode: %s (%d)",
+         skyle_tracking_power_tier_name((skyle_tracking_power_tier)mode->tier), result);
     return result;
 }
 

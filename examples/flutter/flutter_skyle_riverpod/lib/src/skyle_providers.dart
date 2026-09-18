@@ -144,17 +144,34 @@ Stream<SkyleLinkClientEvent> skyleLinkClients(Ref ref) {
   return client.linkClientStream;
 }
 
+/// Stream provider for the hub-hosting app's reported visibility of one
+/// overlay ([SkyleLinkHostControlId.menuBar] / [SkyleLinkHostControlId.pointerOverlay])
+/// while this process is a link client: true visible, false hidden, null
+/// unknown. Seeded with the current native cached value, then follows every
+/// change; returns to null when the link to the hub is gone.
+@Riverpod(keepAlive: true)
+Stream<bool?> skyleHostVisibility(Ref ref, int controlId) async* {
+  final client = ref.watch(skyleClientProvider);
+  yield client.hostVisibility(controlId);
+  yield* client.hostVisibilityStream.where((event) => event.controlId == controlId).map((event) => event.visible);
+}
+
 /// Current connection state (from stream)
 @Riverpod(keepAlive: true)
 ConnectionState skyleConnectionState(Ref ref) {
   return ref.watch(skyleConnectionStateStreamProvider).value ?? ConnectionState.disconnected;
 }
 
-/// Stream provider for control data
+/// Stream provider for control data. The device pushes control state only on
+/// a control-stream enable and on changes, so a subscriber created after that
+/// push would otherwise sit in loading until the next change. Seeded with the
+/// client's cached state when the device has already pushed it in the current
+/// link session (never with the pre-push default), then follows every push.
 @Riverpod(keepAlive: true)
-Stream<ControlData> skyleControlDataStream(Ref ref) {
+Stream<ControlData> skyleControlDataStream(Ref ref) async* {
   final client = ref.watch(skyleClientProvider);
-  return client.controlDataStream;
+  if (client.hasReceivedControl) yield client.controlData;
+  yield* client.controlDataStream;
 }
 
 /// Current control data

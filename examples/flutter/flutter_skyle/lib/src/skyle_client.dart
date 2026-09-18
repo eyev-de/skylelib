@@ -63,7 +63,33 @@ abstract class SkyleControl {
   /// Most recently set display info (may not yet have been sent).
   DisplayInfo? get displayInfo;
 
+  /// Send the host description (tablet family + model id) to the device so it
+  /// can pick its camera power tier (iPad Pro 60 fps, everything else 30 fps).
+  /// Fire-and-forget; safe to call before the link is up — the value is
+  /// cached and resent on every (re)connect because the device resets the
+  /// tier when a session ends.
+  Future<void> sendHostInfo(HostInfo info);
+
+  /// Most recently set host info (may not yet have been sent).
+  HostInfo? get hostInfo;
+
+  /// Ask the device for an explicit camera frame-rate tier instead of the one
+  /// it derives from [sendHostInfo]. [TrackingPowerTier.defaultTier] hands the
+  /// choice back to the device. Fire-and-forget; safe to call before the link
+  /// is up - the value is cached and resent on every (re)connect because the
+  /// device forgets it when a session ends.
+  Future<void> sendTrackingPowerMode(TrackingPowerTier tier);
+
+  /// Most recently set tracking power tier (may not yet have been sent).
+  TrackingPowerTier? get trackingPowerTier;
+
   ControlData get controlData;
+
+  /// True once the device has pushed its control state in the current link
+  /// session, i.e. [controlData] reflects the device rather than the default.
+  /// Resets when the link drops. Late subscribers use it to decide whether
+  /// [controlData] can seed their view without waiting for the next push.
+  bool get hasReceivedControl;
 
   bool get isStandbyEnabled;
   bool get isAutoPauseEnabled;
@@ -122,6 +148,8 @@ class SkyleClient implements SkyleControl, SkyleGaze, SkylePositioning, SkyleVid
   final SkyleClientFfi _ffi = SkyleClientFfi();
   bool _initialized = false;
   DisplayInfo? _displayInfo;
+  HostInfo? _hostInfo;
+  TrackingPowerTier? _trackingPowerTier;
   StreamSubscription<ConnectionState>? _stateSub;
   StreamSubscription<ControlData>? _controlIngestSub;
   final StreamController<ControlData> _controlDataController = StreamController<ControlData>.broadcast();
@@ -213,6 +241,38 @@ class SkyleClient implements SkyleControl, SkyleGaze, SkylePositioning, SkyleVid
   /// receives them; the disconnect events carry the app id a
   /// restore-on-disconnect policy keys on. Events, not state - no seed.
   Stream<SkyleLinkClientEvent> get linkClientStream => _ffi.linkClientStream;
+
+  /// The hub-hosting app's published control states (HOST_STATE) while this
+  /// process is a link client - what Skyle X actually shows, not what was
+  /// commanded. Emits on changes only, plus an unknown entry (value null) per
+  /// control when the link to the hub is gone. Seed from [hostState].
+  Stream<SkyleLinkHostState> get hostStateStream => _ffi.hostStateStream;
+
+  /// Visibility changes of the hub-hosting app's overlays (menu bar, pointer
+  /// overlay) as reported by that app. Emits on changes only; seed new
+  /// listeners from [hostVisibility] / [isHostMenuBarVisible] /
+  /// [isHostPointerVisible]. Never emits as hub owner or on direct USB.
+  Stream<SkyleLinkHostVisibility> get hostVisibilityStream => _ffi.hostVisibilityStream;
+
+  /// Last published value of a hub-hosting app control; null when unknown.
+  Uint8List? hostState(int controlId) => _ffi.hostState(controlId);
+
+  /// Reported visibility of a hub-hosting app overlay: true visible, false
+  /// hidden, null unknown (not a link client, hub without HOST_STATE
+  /// support - see [hubSupportsHostState] - nothing reported yet, or the link
+  /// to the hub died).
+  bool? hostVisibility(int controlId) => _ffi.hostVisibility(controlId);
+
+  /// Reported visibility of the hub-hosting app's menu bar (null = unknown).
+  bool? get isHostMenuBarVisible => hostVisibility(SkyleLinkHostControlId.menuBar);
+
+  /// Reported visibility of the hub-hosting app's pointer overlay (null = unknown).
+  bool? get isHostPointerVisible => hostVisibility(SkyleLinkHostControlId.pointerOverlay);
+
+  /// True while linked to a hub that publishes HOST_STATE; false as hub
+  /// owner, on direct USB, or against an older hub (visibility then stays
+  /// unknown forever).
+  bool get hubSupportsHostState => _ffi.hubSupportsHostState;
 
   void _log(LogLevel level, String message) {
     _ffi.emitLog(level, 'SkyleClient', message);
@@ -320,6 +380,20 @@ class SkyleClient implements SkyleControl, SkyleGaze, SkylePositioning, SkyleVid
           _ffi.sendDisplayInfo(_displayInfo!);
         } catch (e) {
           _log(LogLevel.error, 'auto-send display info failed: $e');
+        }
+      }
+      if (state.isReady && _hostInfo != null) {
+        try {
+          _ffi.sendHostInfo(_hostInfo!);
+        } catch (e) {
+          _log(LogLevel.error, 'auto-send host info failed: $e');
+        }
+      }
+      if (state.isReady && _trackingPowerTier != null) {
+        try {
+          _ffi.sendTrackingPowerMode(_trackingPowerTier!);
+        } catch (e) {
+          _log(LogLevel.error, 'auto-send tracking power mode failed: $e');
         }
       }
     });
@@ -478,6 +552,36 @@ class SkyleClient implements SkyleControl, SkyleGaze, SkylePositioning, SkyleVid
   Future<bool> startHostCalibration({int points = 0}) =>
       sendHostControl(SkyleLinkHostControlId.startCalibration, points > 0 ? Uint8List.fromList([points]) : null);
 
+  /// Hosting-app side (Skyle X): publish the ACTUAL state of a control so
+  /// link clients can read it back ([hostState] / [hostVisibility] there).
+  /// Call it after applying, refusing, or restoring a host-control command
+  /// and whenever the user changes the element in the app itself. Process-wide
+  /// and mode independent: the value is stored natively, pushed to the hub
+  /// while this process owns it, and seeded into every later hub - so it is
+  /// safe to call at startup before the supervisor has elected an owner. Not a
+  /// command: it changes nothing in other apps. Returns false only when the
+  /// native library lacks HOST_STATE support or the value is out of bounds
+  /// (max 64 bytes, max 16 distinct control ids).
+  Future<bool> publishHostState(int controlId, [Uint8List? value]) async {
+    if (!_initialized) {
+      return false;
+    }
+    final result = _ffi.publishHostState(controlId, value ?? Uint8List(0));
+    if (result != 0) {
+      _log(LogLevel.warning, 'publishHostState($controlId) failed (code $result)');
+    }
+    return result == 0;
+  }
+
+  /// [publishHostState] with the u8 visible layout of the visibility controls.
+  Future<bool> publishHostVisibility(int controlId, bool visible) => publishHostState(controlId, Uint8List.fromList([visible ? 1 : 0]));
+
+  /// Report the hosting app's actual menu bar visibility to link clients.
+  Future<bool> publishMenuBarVisibility(bool visible) => publishHostVisibility(SkyleLinkHostControlId.menuBar, visible);
+
+  /// Report the hosting app's actual pointer overlay visibility to link clients.
+  Future<bool> publishPointerVisibility(bool visible) => publishHostVisibility(SkyleLinkHostControlId.pointerOverlay, visible);
+
   /// Stop the Android process-wide USB host (SkyleUsbHost.stop()): disables the
   /// Skyle Link supervisor (BYE(handover) to hub clients), releases the USB
   /// device, and clears native host ownership so another app can take over
@@ -629,10 +733,57 @@ class SkyleClient implements SkyleControl, SkyleGaze, SkylePositioning, SkyleVid
     }
   }
 
+  @override
+  HostInfo? get hostInfo => _hostInfo;
+
+  @override
+  Future<void> sendHostInfo(HostInfo info) async {
+    _checkInitialized();
+    // Cache so we can auto-resend on (re)connect; the device drops the host
+    // tier with the session.
+    _hostInfo = info;
+
+    if (!isReady) {
+      // Will be sent by the stateStream listener once the link is ready.
+      return;
+    }
+
+    final result = _ffi.sendHostInfo(info);
+    if (result != 0) {
+      final error = _ffi.getLastError() ?? 'Unknown error';
+      throw SkyleException('Send host info failed: $error (code: $result)');
+    }
+  }
+
+  @override
+  TrackingPowerTier? get trackingPowerTier => _trackingPowerTier;
+
+  @override
+  Future<void> sendTrackingPowerMode(TrackingPowerTier tier) async {
+    _checkInitialized();
+    // Cache so we can auto-resend on (re)connect; the device drops the
+    // explicit tier with the session.
+    _trackingPowerTier = tier;
+
+    if (!isReady) {
+      // Will be sent by the stateStream listener once the link is ready.
+      return;
+    }
+
+    final result = _ffi.sendTrackingPowerMode(tier);
+    if (result != 0) {
+      final error = _ffi.getLastError() ?? 'Unknown error';
+      throw SkyleException('Send tracking power mode failed: $error (code: $result)');
+    }
+  }
+
   ControlData _controlData = ControlData.empty();
 
   @override
   ControlData get controlData => _controlData;
+
+  @override
+  bool get hasReceivedControl => _hasReceivedControl;
 
   @override
   bool get isStandbyEnabled => _controlData.isStandbyEnabled;

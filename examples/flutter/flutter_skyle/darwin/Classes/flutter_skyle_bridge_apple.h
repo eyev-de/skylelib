@@ -162,6 +162,17 @@ typedef void (*dart_link_client_callback)(
     void* user_data
 );
 
+/**
+ * Skyle Link host-state callback. ABI parity with the fan-out module only;
+ * never fires on iOS (no Skyle Link supervisor there).
+ */
+typedef void (*dart_host_state_callback)(
+    uint16_t control_id,
+    const uint8_t* value,
+    int32_t value_len,
+    void* user_data
+);
+
 // =============================================================================
 // Callback Registration Structure
 // =============================================================================
@@ -187,6 +198,7 @@ typedef struct {
     dart_suspend_state_callback on_suspend_state;
     dart_host_control_callback on_host_control;
     dart_link_client_callback on_link_client;
+    dart_host_state_callback on_host_state;
 } flutter_skyle_callbacks;
 
 #endif // !TARGET_OS_OSX
@@ -256,6 +268,8 @@ FLUTTER_SKYLE_EXPORT int flutter_skyle_request_version(skyle_client* client);
 FLUTTER_SKYLE_EXPORT int flutter_skyle_enable_control(skyle_client* client, bool enable);
 FLUTTER_SKYLE_EXPORT int flutter_skyle_send_control(skyle_client* client, const skyle_control_message* message);
 FLUTTER_SKYLE_EXPORT int flutter_skyle_send_display_info(skyle_client* client, const skyle_set_display_info* info);
+FLUTTER_SKYLE_EXPORT int flutter_skyle_send_host_info(skyle_client* client, const skyle_set_host_info* info);
+FLUTTER_SKYLE_EXPORT int flutter_skyle_send_tracking_power_mode(skyle_client* client, const skyle_set_tracking_power_mode* mode);
 FLUTTER_SKYLE_EXPORT int flutter_skyle_start_calibration(skyle_client* client, const skyle_calibration_config* config);
 FLUTTER_SKYLE_EXPORT int flutter_skyle_collect_calibration_points(skyle_client* client);
 FLUTTER_SKYLE_EXPORT int flutter_skyle_abort_calibration(skyle_client* client);

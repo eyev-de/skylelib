@@ -327,6 +327,8 @@ skyle_result skyle_client_enable_positioning(skyle_client* client, bool enable);
 skyle_result skyle_client_enable_control(skyle_client* client, bool enable);
 skyle_result skyle_client_send_control(skyle_client* client, const skyle_control_message* message);
 skyle_result skyle_client_send_display_info(skyle_client* client, const skyle_set_display_info* info);
+skyle_result skyle_client_send_host_info(skyle_client* client, const skyle_set_host_info* info);
+skyle_result skyle_client_send_tracking_power_mode(skyle_client* client, const skyle_set_tracking_power_mode* mode);
 skyle_result skyle_client_enable_logging(skyle_client* client, bool enable);
 skyle_result skyle_client_enable_video(skyle_client* client, bool enable);
 ```
@@ -339,6 +341,8 @@ skyle_result skyle_client_enable_video(skyle_client* client, bool enable);
 | `skyle_client_enable_control` | Start/stop the control stream → `on_control`. On enable the device replies with the current state. |
 | `skyle_client_send_control` | Push new device settings (tracking mode, filters, pause, HID, …). Bidirectional message. |
 | `skyle_client_send_display_info` | Tell the device your display resolution (px) and physical size (mm). Fire-and-forget. |
+| `skyle_client_send_host_info` | Tell the device which tablet family you run on (iPad Pro/Air/mini, Android, Windows) plus the model id; it picks its camera fps tier from it (iPad Pro 60 fps, else 30 fps) and forgets it when the session ends, so send once per link-up. Fire-and-forget. |
+| `skyle_client_send_tracking_power_mode` | Ask the device for an explicit camera fps tier (`SKYLE_TRACKING_POWER_ULTRA_LOW` 20 .. `ULTRA_HIGH` 60 fps; `DEFAULT` hands the choice back to the host-info policy). Overrides the host-derived tier until the session ends, so re-send once per link-up. Fire-and-forget. |
 | `skyle_client_enable_logging` | Start/stop the device log stream → `on_logging`. |
 | `skyle_client_enable_video` | Start/stop the video stream → `on_video` (delivered via chunked reassembly). |
 
@@ -522,8 +526,8 @@ typedef struct {
     bool    is_auto_pause_enabled;
     bool    is_pause_enabled;
     uint8_t tracking_mode;            // skyle_tracking_mode
-    uint8_t gaze_filter;              // 0–255
-    uint8_t fixation_filter;          // 0–255
+    uint8_t gaze_filter;              // pointer speed, 30 slowest .. 5 fastest; firmware snaps to 5 levels (30/24/18/12/5)
+    uint8_t fixation_filter;          // legacy, ignored by the firmware and echoed back unchanged
     bool    is_assistive_touch_enabled;
     bool    show_tracking_details;
     bool    is_hid_enabled;
@@ -534,9 +538,18 @@ typedef struct {
     skyle_sizeu resolution;   // pixels
     skyle_sizef size_mm;      // millimeters
 } skyle_set_display_info;     // 12-byte payload
+
+typedef struct {
+    uint8_t device_type;      // skyle_host_device_type: UNKNOWN, IPAD, IPAD_MINI, IPAD_AIR, IPAD_PRO, ANDROID_TABLET, WINDOWS_TABLET
+    char    model[64];        // platform model id, NUL-terminated, e.g. "iPad14,3"; may be empty
+} skyle_set_host_info;        // 3 + strlen(model) byte payload
+
+typedef struct {
+    uint8_t tier;             // skyle_tracking_power_tier: DEFAULT, ULTRA_LOW, LOW, MEDIUM, HIGH, ULTRA_HIGH
+} skyle_set_tracking_power_mode; // 1-byte payload
 ```
 
-Helpers: `skyle_control_is_tracking_active(ctrl)`, `skyle_tracking_mode_name(mode)`.
+Helpers: `skyle_control_is_tracking_active(ctrl)`, `skyle_tracking_mode_name(mode)`, `skyle_host_device_type_name(type)`, `skyle_tracking_power_tier_name(tier)`.
 
 ### Calibration (`eap/calibration/calibration_messages.h`)
 

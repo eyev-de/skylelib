@@ -18,7 +18,10 @@ USB transport, and live gaze / positioning / video streams.
 - **Skyle Link host controls** - two toggles (menu bar, pointer overlay) and a
   Calibrate button that send fire-and-forget `skyle_link_send_host_control`
   commands to a hub-hosting Skyle app; the send result is appended to the
-  connection label (refused = this app is not a link client right now).
+  connection label (refused = this app is not a link client right now). Below
+  the buttons the app shows the visibility the host actually reports back
+  (`skyle_link_set_host_visibility_callback` / `skyle_link_get_host_visibility`,
+  HOST_STATE) - "unknown" until a hub that publishes it is linked.
 
 No USB code lives in C#: the library's built-in transports do all USB I/O
 (`eap_transport_iokit_*` on macOS, `eap_transport_usb_*` on Windows).

@@ -171,8 +171,8 @@ bool isStandbyEnabled
 bool isAutoPauseEnabled
 bool isPauseEnabled
 TrackingMode trackingMode        // binocular, left, right
-int gazeFilter                   // 0-255
-int fixationFilter               // 0-255
+int gazeFilter                   // pointer speed, 30 slowest .. 5 fastest (5 levels: 30/24/18/12/5)
+int fixationFilter               // legacy, ignored by the firmware
 bool isAssistiveTouchEnabled
 bool showTrackingDetails
 bool isHidEnabled
@@ -371,6 +371,36 @@ emit for the hub owner. `flutter_skyle_riverpod` exposes them as
 `skyleHostControlProvider` and `skyleLinkClientsProvider` (deliberately
 unseeded - commands/events, not state). Hubs built before HOST_CONTROL
 support (HELLO_ACK capability bit 0) silently ignore the frame.
+
+### Host state (what the host actually shows)
+
+Commands are never answered. Instead the hub-hosting app publishes the ACTUAL
+state of each control (HOST_STATE) - after applying, refusing, or restoring a
+command, and whenever the user changes the element in Skyle X itself. Link
+clients read it back:
+
+```dart
+bool? menu = client.isHostMenuBarVisible;      // null = unknown
+bool? pointer = client.hostVisibility(SkyleLinkHostControlId.pointerOverlay);
+client.hostVisibilityStream.listen((v) => print('${v.controlId}: ${v.visible}'));
+if (!client.hubSupportsHostState) { /* older hub: stays unknown */ }
+```
+
+`null` means unknown: not a link client, the hub predates HOST_STATE
+(`hubSupportsHostState` false), nothing reported yet, or the link to the hub
+died (every state becomes unknown again until the next hub seeds it right
+after the handshake). `flutter_skyle_riverpod` exposes
+`skyleHostVisibilityProvider(SkyleLinkHostControlId.menuBar)` (seeded,
+`bool?`). The generic `hostStateStream` / `hostState(id)` carry the raw value
+bytes for any control id.
+
+On the hosting side (Skyle X) report the real state - it is process-wide and
+mode independent, so it may be called at startup before any election:
+
+```dart
+await client.publishMenuBarVisibility(menuBarShown);
+await client.publishPointerVisibility(pointerShown);
+```
 
 ### Orderly quit (Android)
 

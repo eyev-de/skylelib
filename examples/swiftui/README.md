@@ -26,7 +26,10 @@ CLIENT mode (fine for a demo; register a USB ownership callback if a real app
 must release the device). A row of **host controls** (menu bar / pointer
 overlay toggles + Calibrate) sends fire-and-forget
 `skyle_link_send_host_control` commands to a hub-hosting Skyle app; the send
-result appears next to the connection label (refused = not a link client).
+result appears next to the connection label (refused = not a link client), and
+the visibility the host actually reports back (HOST_STATE, via
+`skyle_link_set_host_visibility_callback` / `skyle_link_get_host_visibility`)
+is shown under the row - "unknown" until a hub that publishes it is linked.
 iPadOS is push mode - no Skyle Link there, the controls are compiled away.
 
 ## Prerequisites

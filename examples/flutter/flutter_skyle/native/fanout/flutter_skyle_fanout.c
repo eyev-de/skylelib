@@ -688,6 +688,26 @@ void flutter_skyle_fanout_dispatch_link_client(bool connected, const char* app_i
     FANOUT_UNLOCK();
 }
 
+void flutter_skyle_fanout_dispatch_host_state(uint16_t control_id, const uint8_t* value, int32_t value_len) {
+    FANOUT_LOCK();
+    for (int i = 0; i < FLUTTER_SKYLE_MAX_SUBSCRIBERS; i++) {
+        eap_subscriber* sub = &g_subscribers[i];
+        if (sub->handle == 0 || !sub->cbs.on_host_state) continue;
+        uint8_t* value_copy = NULL;
+        if (value && value_len > 0) {
+            value_copy = (uint8_t*)malloc((size_t)value_len);
+            if (value_copy) {
+                memcpy(value_copy, value, (size_t)value_len);
+            }
+        }
+        // value_len stays -1 for "unknown"; a failed copy of a non-empty value
+        // degrades to an empty (0-length) delivery rather than a bogus length.
+        int32_t delivered_len = value_len < 0 ? -1 : (value_copy ? value_len : 0);
+        sub->cbs.on_host_state(control_id, value_copy, delivered_len, sub->cbs.user_data);
+    }
+    FANOUT_UNLOCK();
+}
+
 const char* flutter_skyle_fanout_last_error(void) {
     return g_last_error[0] != '\0' ? g_last_error : NULL;
 }

@@ -97,6 +97,8 @@ int flutter_skyle_request_version(skyle_client* client);
 int flutter_skyle_enable_control(skyle_client* client, bool enable);
 int flutter_skyle_send_control(skyle_client* client, const skyle_control_message* message);
 int flutter_skyle_send_display_info(skyle_client* client, const skyle_set_display_info* info);
+int flutter_skyle_send_host_info(skyle_client* client, const skyle_set_host_info* info);
+int flutter_skyle_send_tracking_power_mode(skyle_client* client, const skyle_set_tracking_power_mode* mode);
 int flutter_skyle_start_calibration(skyle_client* client, const skyle_calibration_config* config);
 int flutter_skyle_collect_calibration_points(skyle_client* client);
 int flutter_skyle_abort_calibration(skyle_client* client);

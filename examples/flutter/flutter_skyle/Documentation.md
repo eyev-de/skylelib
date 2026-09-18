@@ -170,8 +170,8 @@ bool get isStandbyEnabled;
 bool get isAutoPauseEnabled;
 bool get isPauseEnabled;
 TrackingMode get trackingMode;                  // binocular / left / right
-int  get gazeFilter;                            // 0–255
-int  get fixationFilter;                        // 0–255
+int  get gazeFilter;                            // pointer speed, 30 slowest .. 5 fastest (firmware uses 5 levels: 30/24/18/12/5)
+int  get fixationFilter;                        // legacy, ignored by the firmware
 bool get isAssistiveTouchEnabled;
 bool get showTrackingDetails;
 bool get isHidEnabled;
@@ -211,6 +211,29 @@ DisplayInfo? get displayInfo;                   // most recently set value
 
 The value is cached and **auto-resent every time the link becomes ready**
 (connect / reconnect / hot restart), so it is safe to call before connecting.
+
+**Host info** — tell the device which tablet family you run on so it can pick
+its camera power tier (iPad Pro tracks at 60 fps, everything else at 30 fps):
+
+```dart
+Future<void> sendHostInfo(HostInfo info); // fire-and-forget; cached
+HostInfo? get hostInfo;                   // most recently set value
+```
+
+Cached and auto-resent like display info; the device resets the tier when a
+session ends, so this is the only way it learns the host after a reconnect.
+
+**Tracking power mode** — ask the device for an explicit camera frame-rate tier
+instead of the one it derives from the host info:
+
+```dart
+Future<void> sendTrackingPowerMode(TrackingPowerTier tier); // fire-and-forget; cached
+TrackingPowerTier? get trackingPowerTier;                   // most recently set value
+```
+
+`TrackingPowerTier.ultraLow` (20 fps) .. `ultraHigh` (60 fps);
+`TrackingPowerTier.defaultTier` hands the choice back to the host-info policy.
+Cached and auto-resent on every link-up like host info.
 
 ### Calibration
 
@@ -403,8 +426,8 @@ class IrisData {
 class ControlMessage {
   final bool isStandbyEnabled, isAutoPauseEnabled, isPauseEnabled;
   final TrackingMode trackingMode;
-  final int gazeFilter;       // 0–255
-  final int fixationFilter;   // 0–255
+  final int gazeFilter;       // pointer speed, 30 slowest .. 5 fastest (5 levels: 30/24/18/12/5)
+  final int fixationFilter;   // legacy, ignored by the firmware
   final bool isAssistiveTouchEnabled, showTrackingDetails, isHidEnabled, isEthernetEnabled;
   factory ControlMessage.empty();
   ControlData copyWith({ ... });
@@ -414,6 +437,15 @@ class DisplayInfo {
   final Sizeu resolution;     // pixels
   final Size2d sizeMm;        // physical millimeters
 }
+
+enum HostDeviceType { unknown, iPad, iPadMini, iPadAir, iPadPro, androidTablet, windowsTablet }
+
+class HostInfo {
+  final HostDeviceType deviceType; // selects the device's camera fps tier
+  final String model;              // platform model id, e.g. "iPad14,3"; informational
+}
+
+enum TrackingPowerTier { defaultTier, ultraLow, low, medium, high, ultraHigh } // fps: host policy, 20, 30, 40, 50, 60
 ```
 
 ### Calibration

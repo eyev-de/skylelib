@@ -3,6 +3,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert' show utf8;
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
@@ -74,6 +75,7 @@ class SkyleClientFfi {
   NativeCallable<DartSuspendStateCallback>? _suspendStateCallable;
   NativeCallable<DartHostControlCallback>? _hostControlCallable;
   NativeCallable<DartLinkClientCallback>? _linkClientCallable;
+  NativeCallable<DartHostStateCallback>? _hostStateCallable;
 
   // Stream controllers for callbacks
   final _gazeController = StreamController<GazesData>.broadcast();
@@ -89,10 +91,16 @@ class SkyleClientFfi {
   final _suspensionController = StreamController<SkyleLinkSuspendState>.broadcast();
   final _hostControlController = StreamController<SkyleLinkHostControl>.broadcast();
   final _linkClientController = StreamController<SkyleLinkClientEvent>.broadcast();
+  final _hostStateController = StreamController<SkyleLinkHostState>.broadcast();
 
   // Skyle Link suspension state, mirrored from the native glue's cache so new
   // listeners can seed synchronously ([suspensionStream] only carries changes).
   SkyleLinkSuspendState _currentSuspension = const SkyleLinkSuspendState(suspended: false);
+
+  // HOST_STATE values mirrored from skylelib's link-client cache (seeded in
+  // [create] for the well-known ids, then kept current by the change callback;
+  // an entry disappears when the state becomes unknown).
+  final Map<int, Uint8List> _hostStates = {};
 
   // Completer for version request with timeout
   Completer<VersionData>? _versionCompleter;
@@ -148,6 +156,41 @@ class SkyleClientFfi {
   /// unseeded; disconnects carry the app id a restore-on-disconnect policy
   /// keys on. Never emits on iOS (no supervisor).
   Stream<SkyleLinkClientEvent> get linkClientStream => _linkClientController.stream;
+
+  /// The hub-hosting app's published control states (HOST_STATE), received
+  /// while this process is a Skyle Link local-link client. Emits on changes
+  /// only, plus an unknown entry (value null) per control when the link to the
+  /// hub is gone. Seed new listeners from [hostState]. Never emits on iOS.
+  Stream<SkyleLinkHostState> get hostStateStream => _hostStateController.stream;
+
+  /// Typed view of [hostStateStream] for the visibility controls (menu bar,
+  /// pointer overlay); seed from [hostVisibility].
+  Stream<SkyleLinkHostVisibility> get hostVisibilityStream => _hostStateController.stream
+      .where((state) => SkyleLinkHostControlId.isVisibilityControl(state.controlId))
+      .map((state) => SkyleLinkHostVisibility(controlId: state.controlId, visible: state.visible));
+
+  /// Last published value of a hub-hosting app control, or null when unknown.
+  Uint8List? hostState(int controlId) => _hostStates[controlId];
+
+  /// Reported visibility of a hub-hosting app overlay: true visible, false
+  /// hidden, null unknown (not a link client, hub without HOST_STATE support,
+  /// nothing reported yet, or the link to the hub died).
+  bool? hostVisibility(int controlId) {
+    final value = _hostStates[controlId];
+    if (value == null || value.isEmpty) return null;
+    return value[0] != 0;
+  }
+
+  /// True while linked to a hub that publishes HOST_STATE (HELLO_ACK capability
+  /// bit 1). False as hub owner, on direct USB, or against an older hub - a
+  /// null [hostVisibility] then never resolves.
+  bool get hubSupportsHostState {
+    final bindings = _bindings;
+    final clientPtr = _clientPtr;
+    final getCaps = bindings?.linkGetHubCapabilities;
+    if (bindings == null || clientPtr == null || getCaps == null || _isDestroyed) return false;
+    return (getCaps(clientPtr) & 0x2) != 0;
+  }
 
   /// True while the automatic transport supervisor runs this client as a
   /// Skyle Link local-link client (SKYLE_LINK_SUPERVISOR_CLIENT == 3), i.e.
@@ -256,6 +299,7 @@ class SkyleClientFfi {
     _suspendStateCallable = NativeCallable<DartSuspendStateCallback>.listener(_onSuspendStateCallback);
     _hostControlCallable = NativeCallable<DartHostControlCallback>.listener(_onHostControlCallback);
     _linkClientCallable = NativeCallable<DartLinkClientCallback>.listener(_onLinkClientCallback);
+    _hostStateCallable = NativeCallable<DartHostStateCallback>.listener(_onHostStateCallback);
 
     // Allocate callbacks structure
     _callbacksPtr = calloc<FlutterSkyleCallbacks>();
@@ -277,7 +321,8 @@ class SkyleClientFfi {
       // Appended fields (order is ABI) - dispatched by the fan-out (never fire on iOS)
       ..onSuspendState = _suspendStateCallable!.nativeFunction
       ..onHostControl = _hostControlCallable!.nativeFunction
-      ..onLinkClient = _linkClientCallable!.nativeFunction;
+      ..onLinkClient = _linkClientCallable!.nativeFunction
+      ..onHostState = _hostStateCallable!.nativeFunction;
 
     // Register this instance for callback lookup
     _registerInstance(hashCode, this);
@@ -286,6 +331,9 @@ class SkyleClientFfi {
     // may have recorded a suspension before this engine subscribed). Change
     // events arrive through each subscriber's onSuspendState field.
     _seedSuspensionState();
+    // Same for the host's published overlay visibility (a running local link
+    // received the HOST_STATE seed long before this engine subscribed).
+    _seedHostStates();
 
     if (_useSubscriberApi) {
       // MULTI-ENGINE FAN-OUT PATH (Android, macOS, Windows, Linux): register
@@ -405,6 +453,47 @@ class SkyleClientFfi {
     } finally {
       calloc.free(suspendedPtr);
       calloc.free(holderBuf);
+    }
+  }
+
+  /// Seed [_hostStates] for the well-known visibility controls from skylelib's
+  /// link-client cache (generic ids are only learned from change events).
+  void _seedHostStates() {
+    final bindings = _bindings;
+    final getState = bindings?.linkGetHostState;
+    if (bindings == null || getState == null) return;
+    final clientPtr = bindings.getInstance();
+    if (clientPtr.address == 0) return;
+    const cap = 64; // SKYLE_LINK_MAX_HOST_STATE_VALUE
+    final buf = calloc<Uint8>(cap);
+    try {
+      _hostStates.clear();
+      for (final id in [SkyleLinkHostControlId.menuBar, SkyleLinkHostControlId.pointerOverlay]) {
+        final len = getState(clientPtr, id, buf, cap);
+        if (len >= 0) {
+          _hostStates[id] = Uint8List.fromList(buf.asTypedList(len < cap ? len : cap));
+        }
+      }
+    } finally {
+      calloc.free(buf);
+    }
+  }
+
+  /// Hosting-app side: publish the actual state of a control (HOST_STATE).
+  /// Returns the native skyle_result (0 = stored; pushed to the hub whenever
+  /// this process serves one).
+  int publishHostState(int controlId, Uint8List value) {
+    final publish = _bindings?.linkPublishHostState;
+    if (publish == null) return -1;
+    if (value.isEmpty) {
+      return publish(controlId, nullptr, 0);
+    }
+    final valuePtr = calloc<Uint8>(value.length);
+    try {
+      valuePtr.asTypedList(value.length).setAll(0, value);
+      return publish(controlId, valuePtr, value.length);
+    } finally {
+      calloc.free(valuePtr);
     }
   }
 
@@ -603,6 +692,7 @@ class SkyleClientFfi {
     _suspendStateCallable?.close();
     _hostControlCallable?.close();
     _linkClientCallable?.close();
+    _hostStateCallable?.close();
 
     _gazeCallable = null;
     _positioningCallable = null;
@@ -620,6 +710,8 @@ class SkyleClientFfi {
     _suspendStateCallable = null;
     _hostControlCallable = null;
     _linkClientCallable = null;
+    _hostStateCallable = null;
+    _hostStates.clear();
 
     // Close stream controllers
     _gazeController.close();
@@ -635,6 +727,7 @@ class SkyleClientFfi {
     _suspensionController.close();
     _hostControlController.close();
     _linkClientController.close();
+    _hostStateController.close();
   }
 
   // ==========================================================================
@@ -730,6 +823,30 @@ class SkyleClientFfi {
     ptr.ref.sizeMm.width = info.sizeMm.width;
     ptr.ref.sizeMm.height = info.sizeMm.height;
     final ret = _bindings!.sendDisplayInfo(_clientPtr!, ptr);
+    calloc.free(ptr);
+    return ret;
+  }
+
+  int sendHostInfo(HostInfo info) {
+    _checkClient();
+    final ptr = calloc<SkyleSetHostInfo>();
+    ptr.ref.deviceType = info.deviceType.value;
+    // calloc zero-fills, so the NUL terminator after the copied bytes is already in place.
+    final bytes = utf8.encode(info.model);
+    final n = bytes.length < HostInfo.maxModelBytes ? bytes.length : HostInfo.maxModelBytes;
+    for (var i = 0; i < n; i++) {
+      ptr.ref.model[i] = bytes[i];
+    }
+    final ret = _bindings!.sendHostInfo(_clientPtr!, ptr);
+    calloc.free(ptr);
+    return ret;
+  }
+
+  int sendTrackingPowerMode(TrackingPowerTier tier) {
+    _checkClient();
+    final ptr = calloc<SkyleSetTrackingPowerMode>();
+    ptr.ref.tier = tier.value;
+    final ret = _bindings!.sendTrackingPowerMode(_clientPtr!, ptr);
     calloc.free(ptr);
     return ret;
   }
@@ -1171,6 +1288,30 @@ class SkyleClientFfi {
     _emitLog(LogLevel.information, 'SkyleLink', 'Link client changed: $event');
     if (!instance._linkClientController.isClosed) {
       instance._linkClientController.add(event);
+    }
+  }
+
+  static void _onHostStateCallback(int controlId, Pointer<Uint8> value, int valueLen, Pointer<Void> userData) {
+    // value is a per-delivery heap copy from the fan-out - free it even when
+    // no instance is around to consume the event. valueLen -1 = unknown.
+    Uint8List? bytes;
+    if (valueLen >= 0) {
+      bytes = value.address != 0 && valueLen > 0 ? Uint8List.fromList(value.asTypedList(valueLen)) : Uint8List(0);
+    }
+    if (value.address != 0) _nativeFree(value.cast());
+
+    final instance = _instance;
+    if (instance == null) return;
+
+    if (bytes == null) {
+      instance._hostStates.remove(controlId);
+    } else {
+      instance._hostStates[controlId] = bytes;
+    }
+    final state = SkyleLinkHostState(controlId: controlId, value: bytes);
+    _emitLog(LogLevel.information, 'SkyleLink', 'Host state changed: $state');
+    if (!instance._hostStateController.isClosed) {
+      instance._hostStateController.add(state);
     }
   }
 

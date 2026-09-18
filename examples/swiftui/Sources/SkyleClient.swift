@@ -25,6 +25,10 @@ final class SkyleClient {
     var onPositioning: ((skyle_complex_face) -> Void)?
     var onVideo: ((Int, Int, Int, [UInt8]) -> Void)?
     var onVersion: ((String, UInt64) -> Void)?
+    /// macOS only: the hub-hosting Skyle app reported the visibility of one of
+    /// its overlays (control id + visible). Fires on changes and once when the
+    /// value first becomes known after this app linked to the hub.
+    var onHostVisibility: ((UInt16, Bool) -> Void)?
 
     func start() {
         guard let c = skyle_client_get_instance() else { return }
@@ -99,6 +103,15 @@ final class SkyleClient {
     @discardableResult
     func startHostCalibration() -> skyle_result {
         sendHostControl(id: UInt16(SKYLE_LINK_CONTROL_START_CALIBRATION.rawValue), value: []) // empty value = app default points
+    }
+
+    /// Visibility of a host overlay as last reported by the hub-hosting Skyle app
+    /// (HOST_STATE), or nil when unknown: not a link client, hub without
+    /// HOST_STATE support, nothing reported yet, or the link to the hub died.
+    func hostVisibility(id: UInt16) -> Bool? {
+        guard let c = client else { return nil }
+        var visible = false
+        return skyle_link_get_host_visibility(c, id, &visible) == SKYLE_OK ? visible : nil
     }
     #endif
 
@@ -196,5 +209,15 @@ final class SkyleClient {
         }
 
         skyle_client_set_callbacks(c, &cfg)
+
+        #if os(macOS)
+        // Skyle Link read-back of the host's published overlay visibility
+        // (HOST_STATE). A client-level slot: set once, survives reconnects.
+        skyle_link_set_host_visibility_callback(c, { _, controlId, visible, user in
+            guard let user = user else { return }
+            let me = Unmanaged<SkyleClient>.fromOpaque(user).takeUnretainedValue()
+            me.onHostVisibility?(controlId, visible)
+        }, cfg.user_data)
+        #endif
     }
 }

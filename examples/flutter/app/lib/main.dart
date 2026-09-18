@@ -181,8 +181,10 @@ class _SegmentedControl extends StatelessWidget {
 /// Host-control test buttons: fire-and-forget Skyle Link commands to the app
 /// hosting the hub (Skyle X). They only work while this app runs as a link
 /// client; a refused send (hub owner / direct USB) shows a SnackBar. The
-/// toggle state is app-local - the host restores hidden UI itself when this
-/// app disconnects.
+/// buttons act on the visibility the host reports back (HOST_STATE) and fall
+/// back to an app-local guess only while that is unknown; the caption shows
+/// the reported state - the host restores hidden UI itself when this app
+/// disconnects.
 class _HostControls extends ConsumerStatefulWidget {
   const _HostControls();
 
@@ -193,6 +195,8 @@ class _HostControls extends ConsumerStatefulWidget {
 class _HostControlsState extends ConsumerState<_HostControls> {
   bool _menuBarVisible = true;
   bool _pointerVisible = true;
+
+  static String _word(bool? visible) => visible == null ? 'unknown' : (visible ? 'visible' : 'hidden');
 
   Future<void> _send(Future<bool> Function(SkyleClient client) action,
       VoidCallback onAccepted) async {
@@ -208,33 +212,51 @@ class _HostControlsState extends ConsumerState<_HostControls> {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+    // Reported by the hub-hosting app (null = unknown: not a link client, older
+    // hub, nothing reported yet, or the link died).
+    final menuReported =
+        ref.watch(skyleHostVisibilityProvider(SkyleLinkHostControlId.menuBar)).value;
+    final pointerReported =
+        ref.watch(skyleHostVisibilityProvider(SkyleLinkHostControlId.pointerOverlay)).value;
+    final menuBarVisible = menuReported ?? _menuBarVisible;
+    final pointerVisible = pointerReported ?? _pointerVisible;
+
+    return Column(
       children: [
-        OutlinedButton.icon(
-          icon: Icon(_menuBarVisible ? Icons.visibility_off : Icons.visibility,
-              size: 18),
-          label: Text(_menuBarVisible ? 'Hide menu bar' : 'Show menu bar'),
-          onPressed: () => _send(
-            (c) => c.setHostMenuBarVisible(!_menuBarVisible),
-            () => setState(() => _menuBarVisible = !_menuBarVisible),
-          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            OutlinedButton.icon(
+              icon: Icon(menuBarVisible ? Icons.visibility_off : Icons.visibility,
+                  size: 18),
+              label: Text(menuBarVisible ? 'Hide menu bar' : 'Show menu bar'),
+              onPressed: () => _send(
+                (c) => c.setHostMenuBarVisible(!menuBarVisible),
+                () => setState(() => _menuBarVisible = !menuBarVisible),
+              ),
+            ),
+            const SizedBox(width: 10),
+            OutlinedButton.icon(
+              icon: Icon(pointerVisible ? Icons.visibility_off : Icons.visibility,
+                  size: 18),
+              label: Text(pointerVisible ? 'Hide pointer' : 'Show pointer'),
+              onPressed: () => _send(
+                (c) => c.setHostPointerVisible(!pointerVisible),
+                () => setState(() => _pointerVisible = !pointerVisible),
+              ),
+            ),
+            const SizedBox(width: 10),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.center_focus_strong, size: 18),
+              label: const Text('Start calibration'),
+              onPressed: () => _send((c) => c.startHostCalibration(), () {}),
+            ),
+          ],
         ),
-        const SizedBox(width: 10),
-        OutlinedButton.icon(
-          icon: Icon(_pointerVisible ? Icons.visibility_off : Icons.visibility,
-              size: 18),
-          label: Text(_pointerVisible ? 'Hide pointer' : 'Show pointer'),
-          onPressed: () => _send(
-            (c) => c.setHostPointerVisible(!_pointerVisible),
-            () => setState(() => _pointerVisible = !_pointerVisible),
-          ),
-        ),
-        const SizedBox(width: 10),
-        OutlinedButton.icon(
-          icon: const Icon(Icons.center_focus_strong, size: 18),
-          label: const Text('Start calibration'),
-          onPressed: () => _send((c) => c.startHostCalibration(), () {}),
+        const SizedBox(height: 6),
+        Text(
+          'Host reports: menu bar ${_word(menuReported)}, pointer ${_word(pointerReported)}',
+          style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.6)),
         ),
       ],
     );

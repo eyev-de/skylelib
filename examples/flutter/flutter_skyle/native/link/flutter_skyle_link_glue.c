@@ -74,6 +74,13 @@ static flutter_skyle_link_suspend_fanout_fn g_suspend_fanout = NULL;
 // hub - commands/events, not state, so there is no cache behind them.
 static flutter_skyle_link_host_control_fanout_fn g_host_control_fanout = NULL;
 static flutter_skyle_link_client_presence_fanout_fn g_client_presence_fanout = NULL;
+static flutter_skyle_link_host_state_fanout_fn g_host_state_fanout = NULL;
+
+// Control ids whose HOST_STATE this process has seen on the current link
+// (guarded by g_link_lock). Only used to report them as unknown again when
+// the supervisor leaves CLIENT mode - the values themselves live in skylelib.
+static uint16_t g_host_state_ids[SKYLE_LINK_MAX_HOST_STATES];
+static int g_host_state_id_count = 0;
 
 void flutter_skyle_link_glue_set_fanout_hook(flutter_skyle_link_suspend_fanout_fn hook) {
     g_suspend_fanout = hook;
@@ -85,6 +92,10 @@ void flutter_skyle_link_glue_set_host_control_fanout_hook(flutter_skyle_link_hos
 
 void flutter_skyle_link_glue_set_client_presence_fanout_hook(flutter_skyle_link_client_presence_fanout_fn hook) {
     g_client_presence_fanout = hook;
+}
+
+void flutter_skyle_link_glue_set_host_state_fanout_hook(flutter_skyle_link_host_state_fanout_fn hook) {
+    g_host_state_fanout = hook;
 }
 
 // =============================================================================
@@ -145,6 +156,33 @@ static void link_glue_suspend_adapter(skyle_client* client, bool suspended, cons
 }
 
 // =============================================================================
+// Client-mode host state adapter (HOST_STATE changes, spec section 8.2)
+// =============================================================================
+
+static void link_glue_host_state_adapter(skyle_client* client, uint16_t control_id, const uint8_t* value, uint16_t value_len, void* user_data) {
+    (void)client;
+    (void)user_data;
+    LINK_LOCK();
+    bool seen = false;
+    for (int i = 0; i < g_host_state_id_count; i++) {
+        if (g_host_state_ids[i] == control_id) {
+            seen = true;
+            break;
+        }
+    }
+    if (!seen && g_host_state_id_count < SKYLE_LINK_MAX_HOST_STATES) {
+        g_host_state_ids[g_host_state_id_count++] = control_id;
+    }
+    LINK_UNLOCK();
+
+    LOGD("host state changed: id=%u len=%u", (unsigned)control_id, (unsigned)value_len);
+    flutter_skyle_link_host_state_fanout_fn fanout = g_host_state_fanout;
+    if (fanout) {
+        fanout(control_id, value, (int32_t)value_len);
+    }
+}
+
+// =============================================================================
 // Hub event adapter (supervisor OWNER mode; registered process-wide via
 // skyle_link_set_supervisor_event_callback). Only SUSPEND_CHANGED feeds the
 // cache - everything else (client counts, preempt, errors) is handled by the
@@ -199,6 +237,8 @@ static void link_glue_hub_event(const skyle_hub_event* event, void* user_data) {
 // Supervisor mode observer
 // =============================================================================
 
+static void link_glue_reset_host_states(void);
+
 /**
  * When the supervisor leaves a serving mode (OWNER: hub gone, lease died with
  * it; CLIENT: link to the hub gone, lease stale), a cached suspension can no
@@ -209,6 +249,10 @@ static void link_glue_hub_event(const skyle_hub_event* event, void* user_data) {
 static void link_glue_mode_changed(skyle_link_supervisor_mode old_mode, skyle_link_supervisor_mode new_mode, void* user_data) {
     (void)user_data;
     LOGD("supervisor mode: %d -> %d", (int)old_mode, (int)new_mode);
+
+    if (old_mode == SKYLE_LINK_SUPERVISOR_CLIENT && new_mode != SKYLE_LINK_SUPERVISOR_CLIENT) {
+        link_glue_reset_host_states();
+    }
 
     bool left_serving = (old_mode == SKYLE_LINK_SUPERVISOR_OWNER || old_mode == SKYLE_LINK_SUPERVISOR_CLIENT) &&
                         (new_mode != SKYLE_LINK_SUPERVISOR_OWNER && new_mode != SKYLE_LINK_SUPERVISOR_CLIENT);
@@ -222,6 +266,29 @@ static void link_glue_mode_changed(skyle_link_supervisor_mode old_mode, skyle_li
     LINK_UNLOCK();
     if (was_suspended) {
         link_glue_update_suspension(false, NULL);
+    }
+}
+
+/**
+ * Leaving CLIENT mode (to any other mode, OWNER included): the link to the hub
+ * is gone and skylelib cleared its HOST_STATE cache - report every control this
+ * process saw as unknown so Dart's mirrors do not keep a stale visibility. The
+ * next CLIENT link re-seeds them (the hub sends the whole set after HELLO_ACK).
+ */
+static void link_glue_reset_host_states(void) {
+    uint16_t ids[SKYLE_LINK_MAX_HOST_STATES];
+    int count;
+    LINK_LOCK();
+    count = g_host_state_id_count;
+    memcpy(ids, g_host_state_ids, sizeof(ids));
+    g_host_state_id_count = 0;
+    LINK_UNLOCK();
+    flutter_skyle_link_host_state_fanout_fn fanout = g_host_state_fanout;
+    for (int i = 0; i < count; i++) {
+        LOGD("host state unknown: id=%u (left client mode)", (unsigned)ids[i]);
+        if (fanout) {
+            fanout(ids[i], NULL, -1);
+        }
     }
 }
 
@@ -255,8 +322,11 @@ void flutter_skyle_link_glue_install(skyle_client* client) {
     // The notice/closed slots stay untouched (skylelib logs them; the
     // supervisor may use them for its own re-election wiring).
     skyle_link_set_suspend_callback(client, link_glue_suspend_adapter, NULL);
+    // Same for HOST_STATE: the hub seeds the whole set right after HELLO_ACK,
+    // so the adapter must be in place before the supervisor ever dials.
+    skyle_link_set_host_state_callback(client, link_glue_host_state_adapter, NULL);
 
-    LOGD("glue_install: supervisor event + suspension adapters installed");
+    LOGD("glue_install: supervisor event + suspension + host state adapters installed");
 }
 
 void flutter_skyle_set_identity(const char* app_id, uint8_t tier, bool usb_capable) {
@@ -293,4 +363,35 @@ int flutter_skyle_link_send_host_control(skyle_client* client, uint16_t control_
     int result = (int)skyle_link_send_host_control(client, control_id, value, value_len);
     LOGD("link_send_host_control: id=%u len=%u -> %d", (unsigned)control_id, (unsigned)value_len, result);
     return result;
+}
+
+// =============================================================================
+// Host state (client mode getters + hosting-app publish)
+// =============================================================================
+
+int flutter_skyle_link_get_host_state(skyle_client* client, uint16_t control_id, uint8_t* value, uint16_t value_cap) {
+    if (!client) return -1;
+    uint16_t len = 0;
+    skyle_result result = skyle_link_get_host_state(client, control_id, value, value ? value_cap : 0, &len);
+    return result == SKYLE_OK ? (int)len : -1;
+}
+
+int flutter_skyle_link_get_host_visibility(skyle_client* client, uint16_t control_id) {
+    if (!client) return -1;
+    bool visible = false;
+    if (skyle_link_get_host_visibility(client, control_id, &visible) != SKYLE_OK) {
+        return -1;
+    }
+    return visible ? 1 : 0;
+}
+
+int flutter_skyle_link_publish_host_state(uint16_t control_id, const uint8_t* value, uint16_t value_len) {
+    int result = (int)skyle_link_publish_host_state(control_id, value, value_len);
+    LOGD("link_publish_host_state: id=%u len=%u -> %d", (unsigned)control_id, (unsigned)value_len, result);
+    return result;
+}
+
+uint32_t flutter_skyle_link_get_hub_capabilities(skyle_client* client) {
+    if (!client) return 0;
+    return skyle_link_get_hub_capabilities(client);
 }

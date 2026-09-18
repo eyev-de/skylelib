@@ -14,6 +14,8 @@ export 'calibration/calibration_result.dart';
 export 'connection/connection_state.dart';
 export 'control/control_data.dart';
 export 'control/display_info.dart';
+export 'control/host_info.dart';
+export 'control/tracking_power_tier.dart';
 export 'gaze/gaze_data.dart';
 export 'gaze/gazes_data.dart';
 export 'gaze/gaze_type.dart';

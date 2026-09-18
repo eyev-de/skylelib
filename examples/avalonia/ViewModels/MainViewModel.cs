@@ -17,6 +17,10 @@ internal sealed class MainViewModel : ViewModelBase, IDisposable
     private volatile VideoFrame? _latestVideo;
     private volatile string _latestVersion = string.Empty;
     private int _latestState = (int)SkyleConnectionState.Disconnected;
+    // Host-reported overlay visibility: -1 unknown, 0 hidden, 1 visible.
+    private int _hostMenuBarReported = -1;
+    private int _hostPointerReported = -1;
+    private int _hostVisibilityDirty;
 
     // What the UI has already consumed.
     private PositioningSnapshot? _posShown;
@@ -30,7 +34,19 @@ internal sealed class MainViewModel : ViewModelBase, IDisposable
         _client.GazeReceived += g => _latestGaze = g;
         _client.VideoReceived += v => _latestVideo = v;
         _client.VersionReceived += v => _latestVersion = v;
-        _client.StateChanged += s => Interlocked.Exchange(ref _latestState, (int)s);
+        _client.StateChanged += s =>
+        {
+            Interlocked.Exchange(ref _latestState, (int)s);
+            // The link may have died with this edge: re-read the host state
+            // (the library reports unknown as soon as the hub is gone).
+            SyncHostVisibility();
+        };
+        _client.HostVisibilityChanged += (control, visible) =>
+        {
+            if (control == SkyleLinkHostControl.MenuBar) Interlocked.Exchange(ref _hostMenuBarReported, visible ? 1 : 0);
+            else if (control == SkyleLinkHostControl.PointerOverlay) Interlocked.Exchange(ref _hostPointerReported, visible ? 1 : 0);
+            Interlocked.Exchange(ref _hostVisibilityDirty, 1);
+        };
 
         // Single UI-thread pump decouples the ~60 Hz device streams from rendering.
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
@@ -153,6 +169,25 @@ internal sealed class MainViewModel : ViewModelBase, IDisposable
     public void StartHostCalibration()
         => NoteHostControl("Calibrate", _client.StartHostCalibration());
 
+    private string _hostVisibilityText = "Host reports: menu bar unknown, pointer unknown";
+    public string HostVisibilityText
+    {
+        get => _hostVisibilityText;
+        private set => SetField(ref _hostVisibilityText, value);
+    }
+
+    /// <summary>Re-read both host visibilities from the library (any thread).</summary>
+    private void SyncHostVisibility()
+    {
+        static int Encode(bool? v) => v is null ? -1 : v.Value ? 1 : 0;
+        Interlocked.Exchange(ref _hostMenuBarReported, Encode(_client.GetHostVisibility(SkyleLinkHostControl.MenuBar)));
+        Interlocked.Exchange(ref _hostPointerReported, Encode(_client.GetHostVisibility(SkyleLinkHostControl.PointerOverlay)));
+        Interlocked.Exchange(ref _hostVisibilityDirty, 1);
+    }
+
+    private static string VisibilityWord(int encoded)
+        => encoded < 0 ? "unknown" : encoded == 0 ? "hidden" : "visible";
+
     private string _hostControlNote = string.Empty;
 
     private void NoteHostControl(string what, int result)
@@ -200,6 +235,13 @@ internal sealed class MainViewModel : ViewModelBase, IDisposable
         var version = _latestVersion;
         if (state == SkyleConnectionState.LinkSynced && version.Length > 0 && DeviceInfo != version)
             DeviceInfo = version;
+
+        if (Interlocked.Exchange(ref _hostVisibilityDirty, 0) == 1)
+        {
+            HostVisibilityText =
+                $"Host reports: menu bar {VisibilityWord(Volatile.Read(ref _hostMenuBarReported))}, " +
+                $"pointer {VisibilityWord(Volatile.Read(ref _hostPointerReported))}";
+        }
     }
 
     private void ApplyStreams()

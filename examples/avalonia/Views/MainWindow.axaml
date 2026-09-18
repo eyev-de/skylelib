@@ -60,15 +60,20 @@
         </Border>
 
         <!-- Skyle Link host controls: fire-and-forget commands to the hub-hosting
-             Skyle app (only delivered while this app is a link client) -->
+             Skyle app (only delivered while this app is a link client), plus the
+             visibility that app reports back (HOST_STATE) -->
         <Border Grid.Row="2" Background="#2A2A30" CornerRadius="8" Padding="8,6"
                 HorizontalAlignment="Center" Margin="0,0,0,14">
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <ToggleButton Content="Menu bar"
-                              IsChecked="{Binding HostMenuBarVisible, Mode=TwoWay}" />
-                <ToggleButton Content="Pointer overlay"
-                              IsChecked="{Binding HostPointerVisible, Mode=TwoWay}" />
-                <Button Content="Calibrate" Click="OnCalibrateClick" />
+            <StackPanel Spacing="4">
+                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                    <ToggleButton Content="Menu bar"
+                                  IsChecked="{Binding HostMenuBarVisible, Mode=TwoWay}" />
+                    <ToggleButton Content="Pointer overlay"
+                                  IsChecked="{Binding HostPointerVisible, Mode=TwoWay}" />
+                    <Button Content="Calibrate" Click="OnCalibrateClick" />
+                </StackPanel>
+                <TextBlock Text="{Binding HostVisibilityText}" FontSize="11" Foreground="#9A9AA5"
+                           HorizontalAlignment="Center" />
             </StackPanel>
         </Border>
 

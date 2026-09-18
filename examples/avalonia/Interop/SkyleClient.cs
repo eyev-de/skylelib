@@ -61,6 +61,8 @@ internal sealed class SkyleClient : IDisposable
     private delegate void StateCb(IntPtr client, int oldState, int newState, IntPtr user);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     private delegate void VersionCb(IntPtr client, IntPtr version, IntPtr user);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    private delegate void HostVisibilityCb(IntPtr client, ushort controlId, [MarshalAs(UnmanagedType.U1)] bool visible, IntPtr user);
 
     private IntPtr _client;
     private IntPtr _transport;
@@ -71,12 +73,20 @@ internal sealed class SkyleClient : IDisposable
     private VideoCb? _videoCb;
     private StateCb? _stateCb;
     private VersionCb? _versionCb;
+    private HostVisibilityCb? _hostVisibilityCb;
 
     public event Action<GazeSnapshot>? GazeReceived;
     public event Action<PositioningSnapshot>? PositioningReceived;
     public event Action<VideoFrame>? VideoReceived;
     public event Action<SkyleConnectionState>? StateChanged;
     public event Action<string>? VersionReceived;
+
+    /// <summary>
+    /// The hub-hosting Skyle app reported the visibility of one of its overlays
+    /// (menu bar / pointer overlay). Fires on changes and once when the value
+    /// first becomes known after this app linked to the hub.
+    /// </summary>
+    public event Action<SkyleLinkHostControl, bool>? HostVisibilityChanged;
 
     public void Start()
     {
@@ -161,6 +171,7 @@ internal sealed class SkyleClient : IDisposable
         _videoCb = OnVideo;
         _stateCb = OnState;
         _versionCb = OnVersion;
+        _hostVisibilityCb = OnHostVisibility;
 
         var callbacks = new SkyleCallbackConfig
         {
@@ -172,6 +183,11 @@ internal sealed class SkyleClient : IDisposable
             UserData = IntPtr.Zero,
         };
         NativeMethods.skyle_client_set_callbacks(_client, ref callbacks);
+
+        // Skyle Link read-back of the host's published overlay visibility
+        // (HOST_STATE). A client-level slot: set once, survives reconnects.
+        NativeMethods.skyle_link_set_host_visibility_callback(_client,
+            Marshal.GetFunctionPointerForDelegate(_hostVisibilityCb), IntPtr.Zero);
     }
 
     // ---- streaming control (safe to call from any thread) ----
@@ -209,6 +225,23 @@ internal sealed class SkyleClient : IDisposable
     public int StartHostCalibration()
         => SendHostControl((ushort)SkyleLinkHostControl.StartCalibration, null); // empty value = app default points
 
+    /// <summary>
+    /// Visibility of a host overlay as last reported by the hub-hosting Skyle app,
+    /// or null when unknown (not a link client, hub without HOST_STATE support,
+    /// nothing reported yet, or the link to the hub died).
+    /// </summary>
+    public bool? GetHostVisibility(SkyleLinkHostControl control)
+    {
+        if (_client == IntPtr.Zero || _disposed) return null;
+        try
+        {
+            return NativeMethods.skyle_link_get_host_visibility(_client, (ushort)control, out bool visible) == (int)SkyleResult.Ok
+                ? visible
+                : null;
+        }
+        catch { return null; }
+    }
+
     // ---- native callbacks (run on the library's background I/O thread) ----
 
     private void OnGaze(IntPtr client, IntPtr gaze, IntPtr user)
@@ -237,6 +270,9 @@ internal sealed class SkyleClient : IDisposable
 
     private void OnState(IntPtr client, int oldState, int newState, IntPtr user)
         => StateChanged?.Invoke((SkyleConnectionState)newState);
+
+    private void OnHostVisibility(IntPtr client, ushort controlId, bool visible, IntPtr user)
+        => HostVisibilityChanged?.Invoke((SkyleLinkHostControl)controlId, visible);
 
     private void OnVersion(IntPtr client, IntPtr version, IntPtr user)
     {

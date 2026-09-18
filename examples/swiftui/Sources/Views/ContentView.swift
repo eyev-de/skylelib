@@ -39,14 +39,20 @@ struct ContentView: View {
             // Skyle Link host controls: fire-and-forget commands to the
             // hub-hosting Skyle app (only delivered while this app is a link client)
             #if os(macOS)
-            HStack(spacing: 10) {
-                Toggle("Menu bar", isOn: $vm.hostMenuBarVisible)
-                    .toggleStyle(.button)
-                    .onChange(of: vm.hostMenuBarVisible) { vm.setHostMenuBarVisible($0) }
-                Toggle("Pointer overlay", isOn: $vm.hostPointerVisible)
-                    .toggleStyle(.button)
-                    .onChange(of: vm.hostPointerVisible) { vm.setHostPointerVisible($0) }
-                Button("Calibrate") { vm.startHostCalibration() }
+            VStack(spacing: 4) {
+                HStack(spacing: 10) {
+                    Toggle("Menu bar", isOn: $vm.hostMenuBarVisible)
+                        .toggleStyle(.button)
+                        .onChange(of: vm.hostMenuBarVisible) { vm.setHostMenuBarVisible($0) }
+                    Toggle("Pointer overlay", isOn: $vm.hostPointerVisible)
+                        .toggleStyle(.button)
+                        .onChange(of: vm.hostPointerVisible) { vm.setHostPointerVisible($0) }
+                    Button("Calibrate") { vm.startHostCalibration() }
+                }
+                // What the hub-hosting app reports back (HOST_STATE)
+                Text(vm.hostVisibilityNote)
+                    .font(.caption)
+                    .foregroundColor(.gray)
             }
             #endif
 
