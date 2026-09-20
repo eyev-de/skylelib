@@ -51,9 +51,9 @@ class SkyleClientFfi {
   /// Subscriber engine token: the native engine id, which identifies the
   /// ENGINE (not the Dart isolate) and therefore survives a hot restart -
   /// exactly the case where the native table still holds the previous
-  /// isolate's dead subscriber. On desktop the token is passed to
-  /// flutter_skyle_add_callbacks_engine, whose same-token re-add reaps that
-  /// stale entry (Android reaps via Kotlin instead and passes no token).
+  /// isolate's dead subscriber. The token is passed to
+  /// flutter_skyle_add_callbacks_engine on every fan-out platform, whose
+  /// same-token re-add reaps that stale entry (Android reaps via Kotlin too).
   /// Falls back to 0 when no engine id is available (tests); the native side
   /// then skips reaping and behaves like a plain add.
   static int _engineToken() => PlatformDispatcher.instance.engineId ?? 0;
@@ -351,15 +351,24 @@ class SkyleClientFfi {
       // and the desktop engines.
       _bindings!.linkGlueInstall?.call(_clientPtr!);
 
-      // Android reaps stale subscribers via Kotlin (reportSubscriberHandle ->
-      // onDetachedFromEngine); desktop passes the engine token so a re-add
-      // after hot restart atomically reaps the previous isolate's subscriber.
-      final handle = Platform.isAndroid
-          ? _bindings!.addCallbacks!(_clientPtr!, _callbacksPtr!)
-          : _bindings!.addCallbacksEngine!(_clientPtr!, _callbacksPtr!, _engineToken());
+      // Pass the engine token wherever the binary exports the engine variant:
+      // a same-token re-add atomically reaps the previous isolate's subscriber
+      // after a hot restart. Android ALSO reaps via Kotlin
+      // (reportSubscriberHandle -> onDetachedFromEngine), which covers engine
+      // teardown; the token covers the case where that async report never
+      // reached the plugin instance.
+      final addEngine = _bindings!.addCallbacksEngine;
+      final handle = addEngine != null ? addEngine(_clientPtr!, _callbacksPtr!, _engineToken()) : _bindings!.addCallbacks!(_clientPtr!, _callbacksPtr!);
       if (handle <= 0) {
         _cleanup();
-        throw StateError('Failed to add callback subscriber (error: $handle)');
+        // -2 is the native subscriber table being full: an earlier Flutter
+        // engine was torn down without being destroyed, so its slot was never
+        // released (the host embedder must destroy engines it discards).
+        throw StateError(
+          handle == -2
+              ? 'Failed to add callback subscriber: native subscriber table full - a previous Flutter engine was discarded without being destroyed'
+              : 'Failed to add callback subscriber (error: $handle)',
+        );
       }
       _subscriberHandle = handle;
       _emitLog(LogLevel.information, 'SkyleClientFfi', 'Registered callback subscriber (handle=$handle)');

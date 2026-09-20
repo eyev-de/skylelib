@@ -32,8 +32,8 @@ import Foundation
 // NOTE: Xcode caches manifest evaluation. After creating or removing the local
 // copy, re-resolve packages (File > Packages > Reset Package Caches, or
 // `flutter clean`) for the switch to take effect.
-let skylelibVersion = "2.2.0"
-let skylelibChecksum = "31fc147c1b3003982c28b731e09a59e82b7e9ee4ab00336f9977e3937d82e4a4"
+let skylelibVersion = "2.2.1"
+let skylelibChecksum = "592423c1f562da049385c53945ee0e4a8f74602308b8b7c884e90df6ce4a2a58"
 
 let localXCFrameworkPath = ".skylelib/skylelib.xcframework"
 let hasLocalXCFramework = FileManager.default.fileExists(
