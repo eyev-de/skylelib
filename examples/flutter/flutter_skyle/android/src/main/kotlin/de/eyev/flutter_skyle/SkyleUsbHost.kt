@@ -21,7 +21,7 @@ import io.flutter.Log
  *
  * Skyle Link: transport selection is fully automatic (spec section 10).
  * start() registers the transport plumbing, publishes the app's identity
- * (skylex/tier 0 for the Skyle X package, manifest meta-data otherwise),
+ * (de.eyev.skylex/tier 0 for the Skyle X package, manifest meta-data otherwise),
  * wires the supervisor's USB ownership grants to [UsbEndpointManager], and
  * enables the supervisor. The supervisor then serves the hub / claims USB /
  * dials another hub / handles preemption entirely on its own - including
@@ -49,7 +49,7 @@ object SkyleUsbHost {
 
     private fun resolveIdentity(context: Context) {
         if (context.packageName == SKYLEX_PACKAGE) {
-            appId = "skylex"
+            appId = "de.eyev.skylex"
             tier = 0
             return
         }

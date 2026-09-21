@@ -1,5 +1,7 @@
 // Flutter also defines a `ConnectionState` (for StreamBuilder); hide it so the
 // one from flutter_skyle is unambiguous.
+import 'dart:ui' show AppExitResponse;
+
 import 'package:flutter/material.dart' hide ConnectionState;
 import 'package:flutter_skyle_riverpod/flutter_skyle_riverpod.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -39,11 +41,39 @@ class HomePage extends ConsumerStatefulWidget {
 class _HomePageState extends ConsumerState<HomePage> {
   ViewMode _mode = ViewMode.positioning;
 
+  // Quit path: hand the tracker over (Skyle Link BYE(handover) + USB release)
+  // before the process goes. Without this a quitting hub owner just drops its
+  // socket and USB handle with the process - peers still recover, but only
+  // through their loss detection. Fires on the platform's close request
+  // (window close button, Cmd+Q, taskkill without /F).
+  late final AppLifecycleListener _lifecycleListener;
+  bool _exiting = false;
+
   @override
   void initState() {
     super.initState();
+    _lifecycleListener = AppLifecycleListener(onExitRequested: _onExitRequested);
     // Start the handshake once the first frame is up.
     WidgetsBinding.instance.addPostFrameCallback((_) => _connect());
+  }
+
+  @override
+  void dispose() {
+    _lifecycleListener.dispose();
+    super.dispose();
+  }
+
+  Future<AppExitResponse> _onExitRequested() async {
+    if (_exiting) return AppExitResponse.exit;
+    _exiting = true;
+    debugPrint('[example] exit requested - Skyle Link handover');
+    try {
+      await SkyleClient.stopUsbHost();
+    } catch (e) {
+      debugPrint('[example] stopUsbHost failed: $e');
+    }
+    debugPrint('[example] handover done - exiting');
+    return AppExitResponse.exit;
   }
 
   /// Connect, retrying briefly: on some platforms (e.g. macOS) the plugin wires

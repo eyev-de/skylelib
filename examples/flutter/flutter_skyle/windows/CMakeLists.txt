@@ -34,7 +34,17 @@ else()
 endif()
 
 if(NOT DEFINED SKYLELIB_DIST)
-  set(_SKYLELIB_REPO_DIST "${CMAKE_CURRENT_SOURCE_DIR}/../../../../dist/${SKYLELIB_TARGET}")
+  # Resolve the plugin dir through the symlink Flutter creates under
+  # <app>/windows/flutter/ephemeral/.plugin_symlinks/: a relative ../../../../
+  # taken from the symlinked path lands in the consuming app's windows/flutter
+  # dir, not in the skylelib checkout, so source-tree dist/ builds were never
+  # picked up by Flutter apps (only the downloaded per-version cache was).
+  if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.19)
+    file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}" _SKYLELIB_PLUGIN_WINDOWS_DIR)
+  else()
+    get_filename_component(_SKYLELIB_PLUGIN_WINDOWS_DIR "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
+  endif()
+  set(_SKYLELIB_REPO_DIST "${_SKYLELIB_PLUGIN_WINDOWS_DIR}/../../../../dist/${SKYLELIB_TARGET}")
   if(EXISTS "${_SKYLELIB_REPO_DIST}/lib/skylelib.lib")
     set(SKYLELIB_DIST "${_SKYLELIB_REPO_DIST}")
   else()

@@ -2,6 +2,26 @@
 
 ### Added
 
+- `SkyleClient.stopUsbHost()` now performs the Skyle Link handover on desktop
+  too (macOS/Windows/Linux): it disables the transport supervisor - as hub
+  owner BYE(handover) to every link client, hub stop, USB release through the
+  platform ownership callback (WinUSB/IOKit claim closed) - and waits, bounded
+  by the new `timeout` parameter (default 2500 ms), until the supervisor
+  reports DISABLED. Previously a no-op outside Android, so a quitting desktop
+  hub owner dropped its TCP connections and USB handle with the process and
+  clients only recovered through loss detection. Call it first thing in the
+  app's quit path; the example app does so from `AppLifecycleListener.
+  onExitRequested`.
+
+- Android: the Skyle X host identity is now `de.eyev.skylex` (was `skylex`),
+  matching the desktop identity, so hub logs, HELLO app ids and
+  restore-on-disconnect keys read the same on every platform.
+
+- skylelib (Windows): a WinUSB open that fails with ERROR_ACCESS_DENIED or
+  ERROR_SHARING_VIOLATION on a present device now logs "held by another
+  process - will retry" instead of the misleading "install the WinUSB driver"
+  hint - that is the normal picture while a Skyle Link peer owns the tracker.
+
 - `SkyleControl.sendHostInfo(HostInfo)` / `hostInfo`: tell the device which
   tablet family the app runs on (`HostDeviceType`: iPad, iPad mini, iPad Air,
   iPad Pro, Android tablet, Windows tablet, unknown) plus the platform model

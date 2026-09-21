@@ -402,12 +402,20 @@ await client.publishMenuBarVisibility(menuBarShown);
 await client.publishPointerVisibility(pointerShown);
 ```
 
-### Orderly quit (Android)
+### Orderly quit (all platforms)
 
-`SkyleClient.stopUsbHost()` disables the supervisor (BYE(handover) to all hub
-clients), releases the USB device, and clears native host ownership so a
-waiting app can take the tracker over. Eye control stays off until the next
-`SkyleUsbHost.start` (app relaunch / service rebind).
+Call `SkyleClient.stopUsbHost()` first thing in your quit path, then exit. It
+disables the supervisor - as hub owner BYE(handover) to all hub clients, hub
+stop, USB release (the WinUSB/IOKit claim closes) - so a waiting app can take
+the tracker over before your process is gone. On desktop it waits (bounded,
+default 2500 ms, `timeout:` parameter) until the supervisor reports DISABLED.
+Android additionally stops the process-wide USB host and clears native host
+ownership; eye control stays off until the next `SkyleUsbHost.start` (app
+relaunch / service rebind). Without the call a quitting hub owner just drops
+its sockets and USB handle with the process: peers still recover, but only
+through their loss detection. The example app calls it from an
+`AppLifecycleListener(onExitRequested: ...)`, which fires for the window close
+button, Cmd+Q and `taskkill` without `/F`.
 
 ### Client app requirements (Android)
 

@@ -582,11 +582,21 @@ class SkyleClient implements SkyleControl, SkyleGaze, SkylePositioning, SkyleVid
   /// Report the hosting app's actual pointer overlay visibility to link clients.
   Future<bool> publishPointerVisibility(bool visible) => publishHostVisibility(SkyleLinkHostControlId.pointerOverlay, visible);
 
-  /// Stop the Android process-wide USB host (SkyleUsbHost.stop()): disables the
-  /// Skyle Link supervisor (BYE(handover) to hub clients), releases the USB
-  /// device, and clears native host ownership so another app can take over
-  /// the tracker. No-op on all other platforms.
-  static Future<void> stopUsbHost() => SkyleClientFfi.stopUsbHost();
+  /// Orderly Skyle Link handover for the app's quit path - call it BEFORE
+  /// tearing the app down, then exit.
+  ///
+  /// Disables the Skyle Link supervisor: as hub owner it sends BYE(handover)
+  /// to every link client, stops the hub and releases the USB device so a
+  /// waiting app can take the tracker over; as link client it closes the local
+  /// link. Android additionally stops the process-wide USB host
+  /// (SkyleUsbHost.stop()) and clears native host ownership. Desktop
+  /// (macOS/Windows/Linux) waits - bounded, default 2500 ms - until the
+  /// supervisor reports DISABLED, so the tracker is free the moment this
+  /// returns. Without this call a quitting hub owner just drops its TCP
+  /// connections and USB handle with the process: clients still recover, but
+  /// only through their loss detection instead of an announced handover.
+  /// No-op on iOS (no supervisor). Eye tracking is off afterwards.
+  static Future<void> stopUsbHost({Duration timeout = const Duration(milliseconds: 2500)}) => SkyleClientFfi.stopUsbHost(timeout: timeout);
 
   // ==========================================================================
   // Feature Control

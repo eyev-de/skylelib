@@ -569,16 +569,52 @@ class SkyleClientFfi {
     }
   }
 
-  /// Ask the Kotlin host to stop the process-wide USB transport + Skyle Link
-  /// hub (orderly handover; see SkyleUsbHost.stop). Android only - a no-op
-  /// elsewhere (desktop owns its transport in-process).
-  static Future<void> stopUsbHost() async {
-    if (!Platform.isAndroid) return;
-    try {
-      await _methodChannel.invokeMethod<bool>('stopUsbHost');
-    } catch (e) {
-      _emitLog(LogLevel.error, 'SkyleClientFfi', 'stopUsbHost failed: $e');
+  /// Orderly Skyle Link handover before the process quits.
+  ///
+  /// Android: asks the Kotlin host to stop the process-wide USB transport +
+  /// hub (see SkyleUsbHost.stop). Desktop (macOS/Windows/Linux): disables the
+  /// transport supervisor - a deliberate stop that, as hub owner, sends
+  /// BYE(handover) to every link client, stops the hub (freeing the port) and
+  /// releases the USB device through the platform ownership callback (the
+  /// WinUSB/IOKit claim closes, so a waiting peer can take the tracker over);
+  /// as link client it closes the local link. The disable itself is
+  /// non-blocking; this waits (bounded by [timeout], default 2500 ms - the
+  /// supervisor bounds the release at ~2 s) until the supervisor thread
+  /// reports DISABLED so callers can exit right after. Eye tracking is off
+  /// afterwards: the engines' shared transport is gone until the process
+  /// restarts. iOS: no-op (no supervisor).
+  static Future<void> stopUsbHost({Duration timeout = const Duration(milliseconds: 2500)}) async {
+    if (Platform.isAndroid) {
+      try {
+        await _methodChannel.invokeMethod<bool>('stopUsbHost');
+      } catch (e) {
+        _emitLog(LogLevel.error, 'SkyleClientFfi', 'stopUsbHost failed: $e');
+      }
+      return;
     }
+    if (!(Platform.isMacOS || Platform.isWindows || Platform.isLinux)) return;
+    final bindings = _bindings;
+    final setEnabled = bindings?.setSupervisorEnabled;
+    final getMode = bindings?.getSupervisorMode;
+    if (setEnabled == null || getMode == null) {
+      _emitLog(LogLevel.warning, 'SkyleClientFfi', 'stopUsbHost: native library has no supervisor support - nothing to hand over');
+      return;
+    }
+    if (getMode() == 0) {
+      _emitLog(LogLevel.debug, 'SkyleClientFfi', 'stopUsbHost: supervisor already disabled');
+      return;
+    }
+    _emitLog(LogLevel.information, 'SkyleClientFfi', 'stopUsbHost: disabling Skyle Link supervisor (BYE(handover) + USB release)');
+    setEnabled(false);
+    final deadline = DateTime.now().add(timeout);
+    while (getMode() != 0) {
+      if (DateTime.now().isAfter(deadline)) {
+        _emitLog(LogLevel.warning, 'SkyleClientFfi', 'stopUsbHost: supervisor still stopping after ${timeout.inMilliseconds} ms (mode ${getMode()})');
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    }
+    _emitLog(LogLevel.information, 'SkyleClientFfi', 'stopUsbHost: supervisor disabled, tracker released');
   }
 
   /// Signal Kotlin to configure native transport
