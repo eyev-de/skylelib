@@ -180,8 +180,8 @@ Java_de_eyev_flutter_1skyle_SkyleClientJni_removeSubscriber(
 /**
  * Set the Skyle Link identity (HELLO app id, priority tier, USB permission
  * state). Safe to call repeatedly - the supervisor picks the change up on its
- * next evaluation (usb_capable flips when Android grants/loses the USB
- * permission).
+ * next evaluation (usb_capable flips when Android grants or explicitly
+ * denies the USB permission; a tracker unplug is not a flip).
  */
 JNIEXPORT void JNICALL
 Java_de_eyev_flutter_1skyle_SkyleClientJni_setIdentity(

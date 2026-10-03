@@ -17,9 +17,14 @@ class UsbEndpointManager(
     private val onDeviceConnected: (UsbDevice) -> Unit,
     private val onDeviceDisconnected: (UsbDevice) -> Unit,
     private val onOpenedSession: () -> Unit,
-    // Fired when the USB capability (tracker attached AND permission held)
-    // changes - the host re-pushes the Skyle Link identity so the supervisor
-    // re-evaluates its election eligibility. Called on the main looper.
+    // Fired when the Skyle Link usb_capable state changes: true when the
+    // platform USB permission is granted, false ONLY on an explicit denial.
+    // A detach is not a capability change - the permission is sticky across
+    // unplugs (the manifest route re-grants it on attach) and the supervisor
+    // answers a revocation while OWNER with a live hub handover (BYE to every
+    // Skyle Link client, port freed), which must not happen on every unplug.
+    // The host re-pushes the identity so the supervisor re-evaluates its
+    // election eligibility. Called on the main looper.
     private val onUsbCapableChanged: (Boolean) -> Unit = {}
 ) : UsbTransportCallback {
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -121,9 +126,17 @@ class UsbEndpointManager(
         }
     }
 
-    /** Tracker attached AND platform USB permission held. No claim, no dialog. */
-    fun hasUsbPermission(): Boolean {
-        val device = findTargetDevice() ?: return false
+    /**
+     * Skyle Link usb_capable seed: whether this app may claim the tracker. True
+     * unless a tracker is attached right now WITHOUT the permission - the only
+     * state that positively says "not capable". With no tracker attached the
+     * permission is unknowable (Android grants it per device instance) and the
+     * manifest route grants it on attach, so the host-owning app counts as
+     * capable and binds the hub up front; a later explicit denial revokes it.
+     * No claim, no dialog.
+     */
+    fun isUsbCapable(): Boolean {
+        val device = findTargetDevice() ?: return true
         return usbManager.hasPermission(device)
     }
 
@@ -298,8 +311,12 @@ class UsbEndpointManager(
                             requestingPermission = false
                             openRetryGeneration++
                             closeDevice()
-                            // Device gone -> not usb_capable until it reattaches.
-                            onUsbCapableChanged(false)
+                            // Deliberately NO usb_capable push: an unplug is not a
+                            // permission change. Pushing false here made the
+                            // supervisor hand the hub over on every unplug and
+                            // re-elect on attach; left alone, the hub keeps serving
+                            // STATE and the attach -> grant -> open path brings the
+                            // link back without an election.
                         }
                     }
                 }

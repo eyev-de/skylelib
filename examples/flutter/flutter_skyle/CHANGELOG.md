@@ -122,6 +122,43 @@
 
 ### Fixed
 
+- File uploads (`uploadFile`, the firmware update path) failed with
+  `Hash mismatch` most of the time: skylelib queued StartFile on the priority
+  ring but the FileData chunks on the bulk ring, and the send thread's
+  anti-starvation rule let chunk 0 overtake StartFile, so the device dropped it
+  as belonging to an unknown transfer. StartFile now goes through the bulk ring
+  with the chunks and EndFile (4 of 5 bench uploads failed before, 0 of 6
+  after). Without a hash the same race used to produce a silently truncated
+  file; firmware from October 2026 on rejects such uploads with
+  `Missing chunks: received X of Y`.
+
+- Android: unplugging the tracker no longer tears the Skyle Link hub down.
+  `UsbEndpointManager` pushed `usb_capable=false` on every USB_DEVICE_DETACHED
+  broadcast, which the supervisor treats as a permission revocation: as hub
+  owner it ran the live handover (BYE(handover) to every link client, port
+  freed) and then dialed a hub that could not exist until the tracker was back,
+  so every unplug cost the hub plus a re-election and every client a re-dial.
+  `usb_capable` is now sticky as the spec intends - seeded true in
+  `SkyleUsbHost.start` unless a tracker is attached without permission, cleared
+  only by an explicit permission denial - so ownership and the hub survive the
+  unplug (clients keep their connection and see STATE disconnected) and the
+  attach -> manifest grant -> open path brings the link back without an
+  election. A host app without a tracker attached now binds the hub at
+  start-up instead of waiting for the first attach.
+
+- skylelib client (all pull-mode platforms): four handshake dead ends that
+  previously needed a cable replug. (1) A firmware soft reset while the link
+  was synced (its 2 s heartbeat watchdog, e.g. after the app process was frozen
+  or the host suspended) left the client LINK_SYNCED forever: the firmware's
+  1 Hz iAP2 probe marker refreshed the RX-staleness timer while every heartbeat
+  was dropped. The marker now restarts the handshake and is answered in place.
+  (2) A SYN received in WAITING_PING (firmware already past probing because an
+  earlier client instance answered the marker) is answered instead of being
+  ignored until the connect timeout. (3) A process that never synced now sends
+  RST after a handshake timeout, the only thing a firmware stuck after its SYN
+  loop reacts to. (4) Several link packets in one USB transfer (the firmware
+  sends no ZLP after a 512-byte multiple) are all parsed instead of only the
+  first; occurrences are counted and logged.
 - iOS: `BoundedQueue.swift` and `OutputStreamManager.swift` were missing
   `import Foundation` and could not compile (both use `DispatchQueue` /
   `DispatchSemaphore` / `Data`).

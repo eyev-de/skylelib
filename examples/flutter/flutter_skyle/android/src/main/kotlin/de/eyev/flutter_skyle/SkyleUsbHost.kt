@@ -107,7 +107,8 @@ object SkyleUsbHost {
             // method-channel notifications had no Dart listener - log only.
             // onUsbCapableChanged re-pushes the identity so the supervisor
             // re-evaluates election eligibility when the permission state
-            // changes (manifest grant landed, dialog answered, device gone).
+            // changes (manifest grant landed, dialog answered or denied). A
+            // detach deliberately pushes nothing - see UsbEndpointManager.
             val manager = UsbEndpointManager(
                 appContext,
                 onDeviceConnected = { device -> Log.d(TAG, "USB device connected: ${device.deviceName}") },
@@ -147,10 +148,15 @@ object SkyleUsbHost {
             // ownership listener must be in place BEFORE the supervisor is
             // enabled, or the first OWNER grant could be missed.
             try {
-                SkyleClientJni.setIdentity(appId, tier, manager.hasUsbPermission())
+                // usb_capable is sticky: seeded true unless a tracker is attached
+                // without permission, cleared only by an explicit denial. The
+                // host-owning app therefore binds the hub even before the first
+                // attach, and an unplug never costs the hub (spec section 7).
+                val usbCapable = manager.isUsbCapable()
+                SkyleClientJni.setIdentity(appId, tier, usbCapable)
                 SkyleClientJni.setUsbOwnershipListener(usbOwnershipListener)
                 SkyleClientJni.setSupervisorEnabled(true)
-                Log.d(TAG, "start: Skyle Link supervisor enabled (appId=$appId, tier=$tier, usbCapable=${manager.hasUsbPermission()})")
+                Log.d(TAG, "start: Skyle Link supervisor enabled (appId=$appId, tier=$tier, usbCapable=$usbCapable)")
             } catch (e: Throwable) {
                 // UnsatisfiedLinkError with an old libflutter_skyle.so, or
                 // anything unexpected: eye tracking must keep working. With
