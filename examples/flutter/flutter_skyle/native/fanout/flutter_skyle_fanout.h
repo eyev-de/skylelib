@@ -131,6 +131,15 @@ typedef void (*dart_calibration_paused_callback)(
 );
 
 /**
+ * Calibration aborted callback - the device aborted the running calibration
+ * (AbortCalibration 0x00C1 from the eye tracker).
+ * @param user_data User data pointer
+ */
+typedef void (*dart_calibration_aborted_callback)(
+    void* user_data
+);
+
+/**
  * Calibration finished callback (struct by value)
  * @param result skyle_finished_calibration struct passed by value
  * @param user_data User data pointer
@@ -322,6 +331,7 @@ typedef struct {
     dart_host_control_callback on_host_control;    // Skyle Link HOST_CONTROL fan-out (hub owner only)
     dart_link_client_callback on_link_client;      // Skyle Link client presence fan-out (hub owner only)
     dart_host_state_callback on_host_state;        // Skyle Link HOST_STATE fan-out (link client only)
+    dart_calibration_aborted_callback on_calibration_aborted;  // Device-initiated AbortCalibration (0x00C1)
 } flutter_skyle_callbacks;
 
 /** Maximum number of concurrent callback subscribers (Flutter engines). */

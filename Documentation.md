@@ -267,10 +267,10 @@ on the background I/O thread.
 | `on_version` | Version/heartbeat response (`skyle_version_response`). |
 | `on_control` | Device control state changed (`skyle_control_message`). |
 | `on_calibration_point` | Device asks you to show the next point (`skyle_next_calibration_point`). |
-| `on_calibration_progress` | Point-collection progress 0–100% (`skyle_collecting_calibration_points`). |
+| `on_calibration_progress` | Point-collection progress 0-255, 255 = point complete (`skyle_collecting_calibration_points`). |
 | `on_calibration_paused` | Device paused point collection. |
 | `on_calibration_finished` | Calibration completed with quality data (`skyle_finished_calibration`). |
-| `on_calibration_aborted` | Device aborted a running calibration (timeout/error). |
+| `on_calibration_aborted` | Device aborted a running calibration (e.g. a Skyle Link hub refused the client's calibration command). |
 | `on_video` | A video frame finished chunked reassembly (`skyle_video_response`). `pixel_data` is valid **only during the call** — copy it to keep it. |
 | `on_file_status` | Progress/success/failure of an upload (`skyle_file_status_response`). |
 | `on_logging` | A device log line (`skyle_logging_response`). `message` is valid only during the call. |
@@ -354,6 +354,7 @@ skyle_result skyle_client_enable_video(skyle_client* client, bool enable);
 skyle_result skyle_client_start_calibration(skyle_client* client,
                                         const skyle_calibration_config* config);
 skyle_result skyle_client_collect_calibration_points(skyle_client* client);
+skyle_result skyle_client_collect_calibration_points_at(skyle_client* client, uint8_t index);
 skyle_result skyle_client_abort_calibration(skyle_client* client);
 ```
 
@@ -362,13 +363,23 @@ Typical flow:
 1. `skyle_client_start_calibration()` with an `skyle_calibration_config` (number of
    points, optional custom coordinates, screen resolution + physical size).
 2. For each point, `on_calibration_point` fires — show the target, then call
-   `skyle_client_collect_calibration_points()` when the user is fixating.
-3. `on_calibration_progress` reports 0–100% for the current point;
-   `on_calibration_paused` may fire between points.
+   `skyle_client_collect_calibration_points_at(client, point->index)` when the user is
+   fixating. Firmware with the 2026-10 calibration rework rejects a confirmation for a
+   different point; older firmware ignores the index. `skyle_client_collect_calibration_points()` sends the
+   legacy message without an index.
+3. `on_calibration_progress` reports 0-255 for the current point (255 = point complete,
+   not a percentage); `on_calibration_paused` fires when the device gets no usable frames
+   for the current point, the next progress callback means collection resumed.
 4. `on_calibration_finished` delivers an `skyle_finished_calibration` with per-eye
-   quality points. **Free it with `skyle_free_finished_calibration()`** when done.
-5. `skyle_client_abort_calibration()` cancels; the device may also abort on its own
-   (→ `on_calibration_aborted`).
+   quality points. The arrays are valid only during the callback - the library frees
+   them afterwards, so copy what you keep. Firmware with the 2026-10 calibration rework
+   adds a details trailer (`has_details`): `success` (decides on its own), the failure
+   `reason`, the quality zero point (per-eye accuracy = zero * (1 - quality / 255)) and
+   on every quality point the per-eye `flags` (valid, excluded, synthesised, unsettled) and
+   `sample_count`. Without details, a result whose points all have quality 0 means the
+   calibration failed (the eye tracker keeps its previous calibration).
+5. `skyle_client_abort_calibration()` cancels; a Skyle Link hub that refuses the
+   client's calibration command answers with an abort (-> `on_calibration_aborted`).
 
 Use `skyle_calibration_get_average_quality()` to reduce the result to a single
 0.0–1.0 score.
@@ -572,7 +583,15 @@ typedef struct {
     skyle_pointf accuracy;   // offset to the calibration point
     float      precision;  // precision radius
     uint8_t    quality;    // 0–255
-} skyle_quality_point;       // 14 bytes
+    uint8_t    flags;        // per eye: SKYLE_QUALITY_POINT_VALID / _EXCLUDED / _SYNTHESISED / _UNSETTLED (details trailer)
+    uint16_t   sample_count; // samples of this eye the fit used here (details trailer)
+} skyle_quality_point;       // 14 bytes on the wire
+
+typedef enum {
+    SKYLE_CALIBRATION_FAILURE_UNSPECIFIED = 0, SKYLE_CALIBRATION_FAILURE_TIMEOUT = 1,
+    SKYLE_CALIBRATION_FAILURE_POINT_TIMEOUT = 2, SKYLE_CALIBRATION_FAILURE_FIT_REJECTED = 3,
+    SKYLE_CALIBRATION_FAILURE_OTHER_CLIENT_CALIBRATING = 4, SKYLE_CALIBRATION_FAILURE_CONFIGURATION_REJECTED = 5
+} skyle_calibration_failure_reason;   // unknown wire values decode as UNSPECIFIED
 
 typedef struct {
     skyle_message_header header;
@@ -580,11 +599,18 @@ typedef struct {
     skyle_quality_point* left;    // free with skyle_free_finished_calibration()
     uint16_t           right_count;
     skyle_quality_point* right;
+    // details trailer (appended), all 0 when has_details is false
+    bool               has_details;
+    bool               success;
+    skyle_calibration_failure_reason reason;
+    float              zero_quality_accuracy_deg;
 } skyle_finished_calibration;
 ```
 
-Free dynamic arrays with `skyle_free_finished_calibration()` (and
-`skyle_free_configure_calibration()` if you built a config with heap arrays).
+Free dynamic arrays with `skyle_free_finished_calibration()` when you parsed them
+yourself (the client frees what it passes to callbacks), and
+`skyle_free_configure_calibration()` if you built a config with heap arrays.
+`skyle_parse_finished_calibration()` fills the details fields from the optional trailer.
 
 ### Video (`eap/video/video_messages.h`)
 

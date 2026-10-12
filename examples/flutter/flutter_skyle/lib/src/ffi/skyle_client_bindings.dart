@@ -29,6 +29,9 @@ typedef DartCalibrationPausedCallback = Void Function(Pointer<Void> userData);
 
 typedef DartCalibrationFinishedCallback = Void Function(SkyleFinishedCalibration result, Pointer<Void> userData);
 
+// Device-initiated AbortCalibration (0x00C1).
+typedef DartCalibrationAbortedCallback = Void Function(Pointer<Void> userData);
+
 typedef DartVideoCallback = Void Function(Pointer<Uint8> data, Uint32 length, Uint16 width, Uint16 height, Uint8 channels, Pointer<Void> userData);
 
 typedef DartFileStatusCallback = Void Function(Uint16 status, Uint16 progress, Pointer<Utf8> errorMessage, Pointer<Void> userData);
@@ -96,6 +99,10 @@ final class FlutterSkyleCallbacks extends Struct {
   // onHostState (appended after onLinkClient - order is ABI): HOST_STATE
   // changes, delivered while this process is a link client; never fires on iOS.
   external Pointer<NativeFunction<DartHostStateCallback>> onHostState;
+
+  // onCalibrationAborted (appended after onHostState - order is ABI): the
+  // device aborted the running calibration; fires on every platform.
+  external Pointer<NativeFunction<DartCalibrationAbortedCallback>> onCalibrationAborted;
 }
 
 // =============================================================================
@@ -157,6 +164,9 @@ typedef FlutterSkyleCollectCalibrationPoints = int Function(Pointer<SkyleClientN
 
 typedef FlutterSkyleAbortCalibrationNative = Int32 Function(Pointer<SkyleClientNative> client);
 typedef FlutterSkyleAbortCalibration = int Function(Pointer<SkyleClientNative> client);
+
+typedef FlutterSkyleCollectCalibrationPointsAtNative = Int32 Function(Pointer<SkyleClientNative> client, Uint8 index);
+typedef FlutterSkyleCollectCalibrationPointsAt = int Function(Pointer<SkyleClientNative> client, int index);
 
 typedef FlutterSkyleSendControlNative = Int32 Function(Pointer<SkyleClientNative> client, Pointer<SkyleControlMessage> message);
 typedef FlutterSkyleSendControl = int Function(Pointer<SkyleClientNative> client, Pointer<SkyleControlMessage> message);
@@ -264,6 +274,10 @@ class SkyleClientBindings {
   late final FlutterSkyleStartCalibration startCalibration;
   late final FlutterSkyleCollectCalibrationPoints collectCalibrationPoints;
   late final FlutterSkyleAbortCalibration abortCalibration;
+
+  /// Indexed StartCollecting (separate lookup: null against a shim that
+  /// predates it; the caller then sends the legacy message).
+  late final FlutterSkyleCollectCalibrationPointsAt? collectCalibrationPointsAt;
   late final FlutterSkyleEnableStream enableVideo;
   late final FlutterSkyleEnableStream enableLogging;
   late final FlutterSkyleUploadFile uploadFile;
@@ -339,6 +353,14 @@ class SkyleClientBindings {
     collectCalibrationPoints = _dylib.lookup<NativeFunction<FlutterSkyleCollectCalibrationPointsNative>>('flutter_skyle_collect_calibration_points').asFunction();
 
     abortCalibration = _dylib.lookup<NativeFunction<FlutterSkyleAbortCalibrationNative>>('flutter_skyle_abort_calibration').asFunction();
+
+    try {
+      collectCalibrationPointsAt = _dylib
+          .lookup<NativeFunction<FlutterSkyleCollectCalibrationPointsAtNative>>('flutter_skyle_collect_calibration_points_at')
+          .asFunction();
+    } catch (_) {
+      collectCalibrationPointsAt = null;
+    }
 
     enableVideo = _dylib.lookup<NativeFunction<FlutterSkyleEnableStreamNative>>('flutter_skyle_enable_video').asFunction();
 

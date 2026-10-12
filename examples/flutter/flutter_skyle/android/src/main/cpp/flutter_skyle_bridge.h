@@ -240,6 +240,14 @@ int flutter_skyle_collect_calibration_points(skyle_client* client);
 int flutter_skyle_abort_calibration(skyle_client* client);
 
 /**
+ * Signal ready for the calibration point with this sequence index (the firmware rejects a stale index)
+ * @param client Client pointer
+ * @param index Sequence index of the NextCalibrationPoint being confirmed
+ * @return 0 on success, negative error code on failure
+ */
+int flutter_skyle_collect_calibration_points_at(skyle_client* client, uint8_t index);
+
+/**
  * Enable/disable video streaming
  * @param client Client pointer
  * @param enable True to enable, false to disable

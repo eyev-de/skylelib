@@ -67,6 +67,7 @@ class SkyleClientFfi {
   NativeCallable<DartCalibrationProgressCallback>? _calibrationProgressCallable;
   NativeCallable<DartCalibrationPausedCallback>? _calibrationPausedCallable;
   NativeCallable<DartCalibrationFinishedCallback>? _calibrationFinishedCallable;
+  NativeCallable<DartCalibrationAbortedCallback>? _calibrationAbortedCallable;
   NativeCallable<DartVideoCallback>? _videoCallable;
   NativeCallable<DartFileStatusCallback>? _fileStatusCallable;
   NativeCallable<DartLoggingCallback>? _loggingCallable;
@@ -291,6 +292,7 @@ class SkyleClientFfi {
     _calibrationProgressCallable = NativeCallable<DartCalibrationProgressCallback>.listener(_onCalibrationProgressCallback);
     _calibrationPausedCallable = NativeCallable<DartCalibrationPausedCallback>.listener(_onCalibrationPausedCallback);
     _calibrationFinishedCallable = NativeCallable<DartCalibrationFinishedCallback>.listener(_onCalibrationFinishedCallback);
+    _calibrationAbortedCallable = NativeCallable<DartCalibrationAbortedCallback>.listener(_onCalibrationAbortedCallback);
     _videoCallable = NativeCallable<DartVideoCallback>.listener(_onVideoCallback);
     _fileStatusCallable = NativeCallable<DartFileStatusCallback>.listener(_onFileStatusCallback);
     _loggingCallable = NativeCallable<DartLoggingCallback>.listener(_onLoggingCallback);
@@ -322,7 +324,8 @@ class SkyleClientFfi {
       ..onSuspendState = _suspendStateCallable!.nativeFunction
       ..onHostControl = _hostControlCallable!.nativeFunction
       ..onLinkClient = _linkClientCallable!.nativeFunction
-      ..onHostState = _hostStateCallable!.nativeFunction;
+      ..onHostState = _hostStateCallable!.nativeFunction
+      ..onCalibrationAborted = _calibrationAbortedCallable!.nativeFunction;
 
     // Register this instance for callback lookup
     _registerInstance(hashCode, this);
@@ -729,6 +732,7 @@ class SkyleClientFfi {
     _calibrationProgressCallable?.close();
     _calibrationPausedCallable?.close();
     _calibrationFinishedCallable?.close();
+    _calibrationAbortedCallable?.close();
     _videoCallable?.close();
     _fileStatusCallable?.close();
     _loggingCallable?.close();
@@ -747,6 +751,7 @@ class SkyleClientFfi {
     _calibrationProgressCallable = null;
     _calibrationPausedCallable = null;
     _calibrationFinishedCallable = null;
+    _calibrationAbortedCallable = null;
     _videoCallable = null;
     _fileStatusCallable = null;
     _loggingCallable = null;
@@ -939,8 +944,14 @@ class SkyleClientFfi {
     return ret;
   }
 
-  int collectCalibrationPoints() {
+  /// Sends an indexed StartCollectingCalibrationPoints when [index] is given and the native shim supports it,
+  /// otherwise the legacy message without an index.
+  int collectCalibrationPoints({int? index}) {
     _checkClient();
+    final indexed = _bindings!.collectCalibrationPointsAt;
+    if (index != null && indexed != null) {
+      return indexed(_clientPtr!, index);
+    }
     return _bindings!.collectCalibrationPoints(_clientPtr!);
   }
 
@@ -1157,6 +1168,13 @@ class SkyleClientFfi {
     instance._calibrationController.add(PausedCalibrationMessage());
   }
 
+  static void _onCalibrationAbortedCallback(Pointer<Void> userData) {
+    final instance = _instance;
+    if (instance == null) return;
+
+    instance._calibrationController.add(AbortCalibrationMessage());
+  }
+
   static void _onCalibrationFinishedCallback(SkyleFinishedCalibration result, Pointer<Void> userData) {
     final instance = _instance;
     if (instance == null) return;
@@ -1172,6 +1190,8 @@ class SkyleClientFfi {
           accuracy: Point2d.fromSkylePointf(qualityPoint.accuracy),
           precision: qualityPoint.precision,
           quality: qualityPoint.quality,
+          flags: qualityPoint.flags,
+          sampleCount: qualityPoint.sampleCount,
         ),
       );
     }
@@ -1184,11 +1204,27 @@ class SkyleClientFfi {
           accuracy: Point2d.fromSkylePointf(qualityPoint.accuracy),
           precision: qualityPoint.precision,
           quality: qualityPoint.quality,
+          flags: qualityPoint.flags,
+          sampleCount: qualityPoint.sampleCount,
         ),
       );
     }
 
-    instance._calibrationController.add(FinishedCalibrationMessage(result: CalibrationResult(left: leftQualityPoints, right: rightQualityPoints)));
+    instance._calibrationController.add(
+      FinishedCalibrationMessage(
+        result: CalibrationResult(
+          left: leftQualityPoints,
+          right: rightQualityPoints,
+          details: result.hasDetails
+              ? CalibrationDetails(
+                  success: result.success,
+                  reason: CalibrationFailureReason.fromValue(result.reason),
+                  zeroQualityAccuracyDeg: result.zeroQualityAccuracyDeg,
+                )
+              : null,
+        ),
+      ),
+    );
   }
 
   static void _onVideoCallback(Pointer<Uint8> data, int length, int width, int height, int channels, Pointer<Void> userData) {

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- `skyleCalibrationStreamProvider` now also emits `AbortCalibrationMessage`
+  when the eye tracker aborts a calibration (forwarded by flutter_skyle).
+
+- `skyleCalibrationStreamProvider` passes `FinishedCalibrationMessage` with
+  the new `CalibrationResult.details` and the per-eye `flags` / `sampleCount`
+  of each `CalibrationQualityPoint` through unchanged.
+  `skyleCalibrationProvider` exposes `collectCalibrationPoints({int? index})`.
+
 ### Fixed
 
 - `skyleControlDataStreamProvider` is seeded with the client's cached control

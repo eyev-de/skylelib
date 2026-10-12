@@ -239,9 +239,14 @@ Cached and auto-resent on every link-up like host info.
 
 ```dart
 Future<void> startCalibration(CalibrationConfig config);
-Future<void> collectCalibrationPoints();   // signal "user is fixating this point"
+Future<void> collectCalibrationPoints({int? index});   // signal "user is fixating this point"
 Future<void> abortCalibration();
 ```
+
+Pass the `point.index` of the `NextCalibrationPointMessage` you are confirming as
+`index`: newer firmware then rejects a stale confirmation for a different point,
+older firmware ignores the byte. Without `index` (or against a native shim that predates
+it) the legacy message is sent.
 
 Drive the workflow off `calibrationStream`, whose events are subclasses of
 `CalibrationMessage`:
@@ -249,10 +254,10 @@ Drive the workflow off `calibrationStream`, whose events are subclasses of
 | Event | Meaning |
 |-------|---------|
 | `NextCalibrationPointMessage` | Show `point` (index + screen coords), then call `collectCalibrationPoints()`. |
-| `ProgressCalibrationPointMessage` | Collection progress 0–100% for the current point. |
-| `PausedCalibrationMessage` | Device paused collection. |
-| `AbortCalibrationMessage` | Device aborted the calibration. |
-| `FinishedCalibrationMessage` | Done — carries a `CalibrationResult` with per-eye quality points. |
+| `ProgressCalibrationPointMessage` | Collection progress 0-255 for the current point (255 = point complete). |
+| `PausedCalibrationMessage` | Device gets no usable frames for the current point; the next progress message means it resumed. |
+| `AbortCalibrationMessage` | Device aborted the calibration (e.g. the Skyle Link hub while another app calibrates). |
+| `FinishedCalibrationMessage` | Done - carries a `CalibrationResult` with per-eye quality points (`index` is the grid id) and, from newer firmware, `details` (`CalibrationDetails`): `success` decides on its own (a successful fit can have every quality at 0) and `reason` (`CalibrationFailureReason`) says why it failed; with details each quality point also carries its per-eye `flags` (`isValid`, `isExcluded`, `isSynthesised`, `isUnsettled`) and `sampleCount`. A refused start (another client calibrates, invalid configuration) also arrives as a failed `FinishedCalibrationMessage`. Without `details` every point at quality 0 means the calibration failed. |
 
 Typical loop:
 
@@ -261,7 +266,7 @@ client.calibrationStream.listen((msg) {
   switch (msg) {
     case NextCalibrationPointMessage(:final point):
       showTarget(point.coordinates);
-      client.collectCalibrationPoints();
+      client.collectCalibrationPoints(index: point.index);
     case ProgressCalibrationPointMessage(:final progress):
       updateBar(progress.progress);
     case FinishedCalibrationMessage(:final result):
@@ -460,19 +465,43 @@ class CalibrationConfig {
 }
 
 class CalibrationPoint    { final int index; final Point2d coordinates; }
-class CalibrationProgress { final int index; final int progress; /* 0–100 */ }
+class CalibrationProgress { final int index; final int progress; /* 0-255, 255 = point complete */ }
 
 class CalibrationQualityPoint {
-  final int index;
-  final Point2d accuracy;   // offset to target
-  final double precision;   // precision radius
-  final int quality;        // 0–255
+  final int index;          // grid id
+  final Point2d accuracy;   // mean gaze estimate minus target, display px
+  final double precision;   // RMS scatter, display px (older firmware: mean offset length)
+  final int quality;        // 0-255 from held-out accuracy, 0 at 3 deg (5-point: 6 deg); older firmware: constant 200
+  final int flags;          // per eye: isValid, isExcluded, isSynthesised, isUnsettled (0 without details)
+  final int sampleCount;    // samples of this eye the fit used at this point (0 without details)
 }
-class CalibrationResult {
+class CalibrationResult {                   // FinishedCalibration (0x00C6)
   final List<CalibrationQualityPoint> left;
   final List<CalibrationQualityPoint> right;
+  final CalibrationDetails? details;        // optional trailer; null from older firmware
+}
+
+enum CalibrationFailureReason {             // wire byte, unknown values -> unspecified
+  unspecified, timeout, pointTimeout, fitRejected, otherClientCalibrating, configurationRejected
+}
+
+class CalibrationDetails {
+  final bool success;
+  final CalibrationFailureReason reason;    // unspecified on success
+  final double zeroQualityAccuracyDeg;      // accuracy that maps to quality 0
+  double accuracyDegForQuality(int quality);   // zeroQualityAccuracyDeg * (1 - quality / 255)
 }
 ```
+
+Accuracy is not sent: per eye it is `details.accuracyDegForQuality(quality)` of that
+eye's `CalibrationQualityPoint`, a lower bound when the quality is 0. The flags and
+sample count are per eye and only set when `details` is present: `isValid` tells
+whether the entry is this eye's own measured data (in a left- or right-only tracking
+mode the untracked eye's entry repeats the tracked eye's values with `isValid`
+clear), `isExcluded` marks a point the grid validator left out of the fit,
+synthesised points (1- and 2-point calibrations) carry no measured data, and
+`isUnsettled` marks a point whose eye was not seen to settle (the eye tracker
+collected it after its 3 s fallback wait, so the point is unverified).
 
 ### Version, video, files, logging
 
@@ -591,12 +620,16 @@ if (gaze.gazeX > face.faceRect.center.x) { ... }
   plain Dart objects, safe to retain.
 - Methods that hit the native layer throw **`SkyleException`** (with a `message`)
   on failure. `enable*` / calibration / control methods additionally short-circuit
-  (log a warning, return) when the client is not `isReady`.
+  (log a warning, return) when the client is not `isReady` - except
+  `startCalibration`, which throws `SkyleNotReadyException` (a `SkyleException`)
+  so the caller can tell the user that no calibration was started.
 
 ```dart
 class SkyleException implements Exception {
   final String message;
 }
+
+class SkyleNotReadyException extends SkyleException {}
 ```
 
 ---

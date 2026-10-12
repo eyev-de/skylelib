@@ -202,6 +202,18 @@ static void on_calibration_paused_adapter(skyle_client* client, void* user_data)
     pthread_mutex_unlock(&ctx->callback_mutex);
 }
 
+static void on_calibration_aborted_adapter(skyle_client* client, void* user_data) {
+    (void)client;
+    bridge_context* ctx = (bridge_context*)user_data;
+    if (!ctx) return;
+
+    pthread_mutex_lock(&ctx->callback_mutex);
+    if (ctx->dart_callbacks.on_calibration_aborted) {
+        ctx->dart_callbacks.on_calibration_aborted(ctx->dart_callbacks.user_data);
+    }
+    pthread_mutex_unlock(&ctx->callback_mutex);
+}
+
 static void on_calibration_finished_adapter(skyle_client* client, const skyle_finished_calibration* result, void* user_data) {
     (void)client;
     bridge_context* ctx = (bridge_context*)user_data;
@@ -476,6 +488,7 @@ FLUTTER_SKYLE_EXPORT int flutter_skyle_set_callbacks(skyle_client* client, const
         .on_calibration_progress = on_calibration_progress_adapter,
         .on_calibration_paused = on_calibration_paused_adapter,
         .on_calibration_finished = on_calibration_finished_adapter,
+        .on_calibration_aborted = on_calibration_aborted_adapter,
         .on_video = on_video_adapter,
         .on_file_status = on_file_status_adapter,
         .on_logging = on_logging_adapter,
@@ -932,6 +945,13 @@ FLUTTER_SKYLE_EXPORT int flutter_skyle_abort_calibration(skyle_client* client) {
     if (!client) return -1;
     skyle_result result = skyle_client_abort_calibration(client);
     LOGD("flutter_skyle_abort_calibration: (%d)", result);
+    return result;
+}
+
+FLUTTER_SKYLE_EXPORT int flutter_skyle_collect_calibration_points_at(skyle_client* client, uint8_t index) {
+    if (!client) return -1;
+    skyle_result result = skyle_client_collect_calibration_points_at(client, index);
+    LOGD("flutter_skyle_collect_calibration_points_at: index=%u (%d)", (unsigned)index, result);
     return result;
 }
 

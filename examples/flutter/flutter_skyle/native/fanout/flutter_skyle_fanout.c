@@ -225,6 +225,23 @@ static void on_calibration_paused_adapter(skyle_client* client, void* user_data)
 }
 
 /**
+ * Calibration aborted callback adapter (device-initiated AbortCalibration)
+ */
+static void on_calibration_aborted_adapter(skyle_client* client, void* user_data) {
+    (void)client;
+    (void)user_data;
+
+    FANOUT_LOCK();
+    for (int i = 0; i < FLUTTER_SKYLE_MAX_SUBSCRIBERS; i++) {
+        eap_subscriber* sub = &g_subscribers[i];
+        if (sub->handle != 0 && sub->cbs.on_calibration_aborted) {
+            sub->cbs.on_calibration_aborted(sub->cbs.user_data);
+        }
+    }
+    FANOUT_UNLOCK();
+}
+
+/**
  * Calibration finished callback adapter - passes skyle_finished_calibration struct directly to Dart
  */
 static void on_calibration_finished_adapter(skyle_client* client, const skyle_finished_calibration* result, void* user_data) {
@@ -514,6 +531,7 @@ static int install_core_adapters(skyle_client* client) {
         .on_calibration_progress = on_calibration_progress_adapter,
         .on_calibration_paused = on_calibration_paused_adapter,
         .on_calibration_finished = on_calibration_finished_adapter,
+        .on_calibration_aborted = on_calibration_aborted_adapter,
         .on_video = on_video_adapter,
         .on_file_status = on_file_status_adapter,
         .on_logging = on_logging_adapter,

@@ -962,6 +962,16 @@ int flutter_skyle_abort_calibration(skyle_client* client) {
     return result;
 }
 
+int flutter_skyle_collect_calibration_points_at(skyle_client* client, uint8_t index) {
+    if (!client) {
+        return -1;
+    }
+
+    skyle_result result = skyle_client_collect_calibration_points_at(client, index);
+    LOGD("flutter_skyle_collect_calibration_points_at: index=%u (%d)", (unsigned)index, result);
+    return result;
+}
+
 int flutter_skyle_enable_video(skyle_client* client, bool enable) {
     if (!client) {
         return -1;

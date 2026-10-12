@@ -28,7 +28,7 @@ abstract class SkyleVersion {
 abstract class SkyleCalibration {
   Stream<CalibrationMessage> get calibrationStream;
   Future<void> startCalibration(CalibrationConfig config);
-  Future<void> collectCalibrationPoints();
+  Future<void> collectCalibrationPoints({int? index});
   Future<void> abortCalibration();
 }
 
@@ -1014,17 +1014,23 @@ class SkyleClient implements SkyleControl, SkyleGaze, SkylePositioning, SkyleVid
   ///
   /// Listen to [calibrationStream] for:
   /// - [NextCalibrationPointMessage] - points to display
-  /// - [ProgressCalibrationPointMessage] - collection progress (0-100%)
-  /// - [PausedCalibrationMessage] - calibration paused
-  /// - [FinishedCalibrationMessage] - calibration complete with results
+  /// - [ProgressCalibrationPointMessage] - collection progress (0-255, 255 = point complete)
+  /// - [PausedCalibrationMessage] - no usable frames for the current point, the next progress message means it resumed
+  /// - [AbortCalibrationMessage] - the device aborted the calibration
+  /// - [FinishedCalibrationMessage] - calibration complete with results; [CalibrationResult.details] (newer firmware)
+  ///   says whether it succeeded and why not, without details every point at quality 0 means it failed. A refused
+  ///   calibration (another client calibrates, invalid configuration) also ends in a failed [FinishedCalibrationMessage]
   ///
-  /// Call [nextCalibrationPoint] when user is ready for each point
+  /// Call [collectCalibrationPoints] when user is ready for each point
+  ///
+  /// Throws [SkyleNotReadyException] when the link is not ready, so no calibration was started and no message will
+  /// arrive on [calibrationStream].
   @override
   Future<void> startCalibration(CalibrationConfig config) async {
     _checkInitialized();
     if (!isReady) {
-      _log(LogLevel.warning, 'Not ready to send/receive messages');
-      return;
+      _log(LogLevel.warning, 'Not ready to send/receive messages - calibration not started');
+      throw SkyleNotReadyException('Start calibration failed: eye tracker link not ready');
     }
 
     final result = _ffi.startCalibration(config);
@@ -1036,16 +1042,21 @@ class SkyleClient implements SkyleControl, SkyleGaze, SkylePositioning, SkyleVid
 
   /// Signal ready for next calibration point
   ///
-  /// Call this after displaying the calibration point to the user
+  /// Call this after displaying the calibration point to the user. [index] is the [CalibrationPoint.index] of the
+  /// [NextCalibrationPointMessage] being confirmed (its sequence index); newer firmware then rejects a stale
+  /// confirmation for a different point, older firmware ignores the index. Without [index] the legacy message is sent.
   @override
-  Future<void> collectCalibrationPoints() async {
+  Future<void> collectCalibrationPoints({int? index}) async {
     _checkInitialized();
     if (!isReady) {
       _log(LogLevel.warning, 'Not ready to send/receive messages');
       return;
     }
+    if (index != null && (index < 0 || index > 255)) {
+      throw ArgumentError.value(index, 'index', 'must fit one byte (0-255)');
+    }
 
-    final result = _ffi.collectCalibrationPoints();
+    final result = _ffi.collectCalibrationPoints(index: index);
     if (result != 0) {
       final error = _ffi.getLastError() ?? 'Unknown error';
       throw SkyleException('Collect calibration points failed: $error (code: $result)');
@@ -1077,4 +1088,12 @@ class SkyleException implements Exception {
 
   @override
   String toString() => 'SkyleException: $message';
+}
+
+/// Thrown when a request needs a ready link (see [SkyleClient.isReady]) but the eye tracker is not connected yet.
+class SkyleNotReadyException extends SkyleException {
+  SkyleNotReadyException(super.message);
+
+  @override
+  String toString() => 'SkyleNotReadyException: $message';
 }

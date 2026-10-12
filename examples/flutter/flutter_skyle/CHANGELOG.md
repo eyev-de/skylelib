@@ -2,6 +2,46 @@
 
 ### Added
 
+- Device-initiated calibration aborts reach Dart: the callback struct gains
+  `on_calibration_aborted` (appended after `on_host_state`, ABI order shared by
+  `native/fanout/flutter_skyle_fanout.h`, the darwin iOS copy and
+  `FlutterSkyleCallbacks`), dispatched by the fan-out on Android/macOS/Windows/
+  Linux and by the iOS single-slot bridge, and `calibrationStream` emits
+  `AbortCalibrationMessage` when the eye tracker sends AbortCalibration
+  (0x00C1). Before, skylelib parsed the message but no bridge forwarded it.
+  Dart and the native bridge must come from the same release (struct layout).
+
+- Calibration details on `FinishedCalibrationMessage` (needs the skylelib
+  release that parses the FinishedCalibration details trailer; older firmware
+  keeps working and simply sends no details):
+  - `CalibrationResult.details` (`CalibrationDetails?`, null without the
+    optional trailer): `success` (decides on its own, a successful fit can
+    have every quality at 0), `CalibrationFailureReason` (timeout, point
+    timeout, fit rejected, other client calibrating, configuration rejected)
+    and `zeroQualityAccuracyDeg`. Accuracy is derived per eye from the quality
+    with `accuracyDegForQuality`. A refused calibration start (another client
+    calibrates, invalid configuration) arrives as a failed
+    `FinishedCalibrationMessage` with that reason.
+  - `CalibrationQualityPoint` gains the per-eye `flags` (`isValid`,
+    `isExcluded`, `isSynthesised`, `isUnsettled`) and `sampleCount` (both 0
+    without details). `isValid` is clear for the untracked eye in a left- or
+    right-only mode, whose entry repeats the tracked eye's values;
+    `isUnsettled` marks a point the eye tracker collected after its fallback
+    wait because the eye was not seen to settle on it (unverified point).
+  - `collectCalibrationPoints({int? index})` sends the sequence index of the
+    point being confirmed, so newer firmware rejects a stale confirmation;
+    without `index` the legacy message is sent.
+  - Native ABI: the `skyle_quality_point` mirror gains `flags` and
+    `sample_count` in its former padding (still 20 bytes) and the
+    `skyle_finished_calibration` mirror gains the appended `has_details`,
+    `success`, `reason` and `zero_quality_accuracy_deg`; the bridges keep
+    passing the finished calibration by value through `on_calibration_finished`.
+    The bridges export `flutter_skyle_collect_calibration_points_at` (looked
+    up optionally; Dart falls back to the legacy send against an older shim).
+
+- `SkyleNotReadyException` (a `SkyleException`), thrown by `startCalibration`
+  (see Breaking Changes).
+
 - `SkyleClient.stopUsbHost()` now performs the Skyle Link handover on desktop
   too (macOS/Windows/Linux): it disables the transport supervisor - as hub
   owner BYE(handover) to every link client, hub stop, USB release through the
@@ -84,6 +124,21 @@
 
 ### Breaking Changes
 
+- `startCalibration` throws `SkyleNotReadyException` when the link is not
+  ready instead of returning silently, so the app can tell the user that no
+  calibration was started. Callers without a try/catch now get an unhandled
+  exception where nothing happened before.
+- `SkyleCalibration.collectCalibrationPoints` gained an optional named
+  parameter (`{int? index}`). Call sites compile unchanged, but classes that
+  implement `SkyleCalibration` or `SkyleClient` (fakes, mocks) must add the
+  parameter to their overrides.
+- Calibration results from eye trackers with the 2026-10 calibration rework:
+  `CalibrationQualityPoint.quality` is computed from the held-out accuracy
+  (older firmware sent a constant 200 for every point with data), so a
+  `quality > 128` check can now reject points it used to accept, and
+  `precision` is the RMS scatter in display px instead of the mean offset
+  length. A failed calibration now ends with a `FinishedCalibrationMessage`
+  whose points all have quality 0, where older firmware sent nothing.
 - Riverpod providers moved to the new sibling package `flutter_skyle_riverpod`.
   Replace `import 'package:flutter_skyle/flutter_skyle_providers.dart';` with
   `import 'package:flutter_skyle_riverpod/flutter_skyle_riverpod.dart';` (it
@@ -121,6 +176,22 @@
   stays single-slot push mode.
 
 ### Fixed
+
+- skylelib: a FinishedCalibration (0x00C6) that the message buffer dropped
+  (buffer full), cleared or still held at destroy leaked its quality point
+  arrays; the buffer now frees them, while a dequeued message stays owned by
+  the dispatcher as before. A FinishedCalibration the buffer refuses is freed
+  right away.
+
+- skylelib: `skyle_client_start_calibration` rejects a configuration whose
+  ConfigureCalibration payload would not fit its 512-byte buffer (or that has
+  a non-zero count with a NULL array) with `SKYLE_ERROR_MEMORY` instead of
+  writing past the stack buffer.
+
+- Docs: CollectingCalibrationPoints (0x00C4) progress is 0-255 on the wire
+  (255 = point complete), not a 0-100 percentage
+  (`calibration_messages.h`, `SKYLE_MESSAGES.md`, `SKYLE_CLIENT_API.md`,
+  `CalibrationProgress`); the CLI example now prints it as a percentage.
 
 - File uploads (`uploadFile`, the firmware update path) failed with
   `Hash mismatch` most of the time: skylelib queued StartFile on the priority

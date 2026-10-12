@@ -102,6 +102,7 @@ int flutter_skyle_send_tracking_power_mode(skyle_client* client, const skyle_set
 int flutter_skyle_start_calibration(skyle_client* client, const skyle_calibration_config* config);
 int flutter_skyle_collect_calibration_points(skyle_client* client);
 int flutter_skyle_abort_calibration(skyle_client* client);
+int flutter_skyle_collect_calibration_points_at(skyle_client* client, uint8_t index);
 int flutter_skyle_enable_video(skyle_client* client, bool enable);
 int flutter_skyle_enable_logging(skyle_client* client, bool enable);
 int flutter_skyle_upload_file(skyle_client* client, const char* path,

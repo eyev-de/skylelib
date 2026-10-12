@@ -295,6 +295,12 @@ final class SkyleCalibrationQualityPoint extends Struct {
 
   @Uint8()
   external int quality; // 1 byte - quality rating 0-255
+
+  @Uint8()
+  external int flags; // SKYLE_QUALITY_POINT_* bits (details trailer, 0 without it)
+
+  @Uint16()
+  external int sampleCount; // samples of this eye the fit used at this point (details trailer, 0 without it)
 }
 
 /// Next calibration point message (header + 9 bytes payload)
@@ -333,4 +339,17 @@ final class SkyleFinishedCalibration extends Struct {
   external int rightCount; // 2 bytes - number of right eye quality points
 
   external Pointer<SkyleCalibrationQualityPoint> right; // pointer to right eye quality points
+
+  // Details trailer (appended); all 0 when hasDetails is false
+  @Bool()
+  external bool hasDetails;
+
+  @Bool()
+  external bool success;
+
+  @Int32()
+  external int reason; // skyle_calibration_failure_reason (C enum, int sized)
+
+  @Float()
+  external double zeroQualityAccuracyDeg;
 }

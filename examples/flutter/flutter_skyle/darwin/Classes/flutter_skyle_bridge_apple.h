@@ -86,6 +86,10 @@ typedef void (*dart_calibration_finished_callback)(
     void* user_data
 );
 
+typedef void (*dart_calibration_aborted_callback)(
+    void* user_data
+);
+
 typedef void (*dart_state_callback)(
     int state,
     void* user_data
@@ -199,6 +203,7 @@ typedef struct {
     dart_host_control_callback on_host_control;
     dart_link_client_callback on_link_client;
     dart_host_state_callback on_host_state;
+    dart_calibration_aborted_callback on_calibration_aborted;
 } flutter_skyle_callbacks;
 
 #endif // !TARGET_OS_OSX
@@ -273,6 +278,7 @@ FLUTTER_SKYLE_EXPORT int flutter_skyle_send_tracking_power_mode(skyle_client* cl
 FLUTTER_SKYLE_EXPORT int flutter_skyle_start_calibration(skyle_client* client, const skyle_calibration_config* config);
 FLUTTER_SKYLE_EXPORT int flutter_skyle_collect_calibration_points(skyle_client* client);
 FLUTTER_SKYLE_EXPORT int flutter_skyle_abort_calibration(skyle_client* client);
+FLUTTER_SKYLE_EXPORT int flutter_skyle_collect_calibration_points_at(skyle_client* client, uint8_t index);
 FLUTTER_SKYLE_EXPORT int flutter_skyle_enable_video(skyle_client* client, bool enable);
 FLUTTER_SKYLE_EXPORT int flutter_skyle_enable_logging(skyle_client* client, bool enable);
 FLUTTER_SKYLE_EXPORT int flutter_skyle_upload_file(skyle_client* client, const char* path,
