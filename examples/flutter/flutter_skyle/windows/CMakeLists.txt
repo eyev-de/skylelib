@@ -48,7 +48,9 @@ if(NOT DEFINED SKYLELIB_DIST)
   if(EXISTS "${_SKYLELIB_REPO_DIST}/lib/skylelib.lib")
     set(SKYLELIB_DIST "${_SKYLELIB_REPO_DIST}")
   else()
-    set(SKYLELIB_DIST "${CMAKE_CURRENT_SOURCE_DIR}/../.skylelib/${SKYLELIB_VERSION}/${SKYLELIB_TARGET}")
+    # Real path, not the symlinked one: CMake's ARCHIVE_EXTRACT refuses to
+    # extract through a symlink ("Cannot extract through symlink").
+    set(SKYLELIB_DIST "${_SKYLELIB_PLUGIN_WINDOWS_DIR}/../.skylelib/${SKYLELIB_VERSION}/${SKYLELIB_TARGET}")
     if(NOT EXISTS "${SKYLELIB_DIST}/lib/skylelib.lib")
       if(NOT SKYLELIB_VERSION)
         message(FATAL_ERROR "flutter_skyle: could not parse version: from pubspec.yaml")
