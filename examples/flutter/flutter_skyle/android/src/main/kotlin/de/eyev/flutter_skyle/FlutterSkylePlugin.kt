@@ -3,7 +3,7 @@ package de.eyev.flutter_skyle
 import android.content.Context
 import android.content.pm.PackageManager
 import android.hardware.usb.UsbManager
-import io.flutter.Log
+import android.util.Log
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel

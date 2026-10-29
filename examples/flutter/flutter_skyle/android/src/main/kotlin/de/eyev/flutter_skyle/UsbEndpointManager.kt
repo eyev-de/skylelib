@@ -9,7 +9,7 @@ import android.hardware.usb.*
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import io.flutter.Log
+import android.util.Log
 
 
 class UsbEndpointManager(
@@ -62,14 +62,19 @@ class UsbEndpointManager(
         private const val GRANT_POLL_INTERVAL_MS = 100L
         private const val GRANT_POLL_MAX_ATTEMPTS = 50
 
+        // Permission watch after the explicit request: polled for as long as the
+        // device stays attached, because the grant can still arrive on a path
+        // whose broadcast we never get (see watchPermissionAndOpen).
+        private const val PERMISSION_WATCH_INTERVAL_MS = 1000L
+
         // Open retries: a failed openDevice/claimInterface right after attach
         // is usually transient (enumeration still settling, stale connection
         // to a re-enumerated instance not torn down yet). The open path is the
         // ONLY way the link comes up - the native transport callbacks are
         // read/write/isDeviceConnected only, so the C reconnect loop cannot
-        // re-trigger it. Without retries a single failure kept the link down
-        // until a physical replug.
-        private const val OPEN_RETRY_MAX_ATTEMPTS = 15
+        // re-trigger it. The retries therefore run for as long as the device
+        // stays attached and ownership is wanted: a bounded chain that gave up
+        // left the tracker closed until a replug or an app restart.
         private const val OPEN_RETRY_BASE_DELAY_MS = 500L
         private const val OPEN_RETRY_MAX_DELAY_MS = 5000L
     }
@@ -81,10 +86,15 @@ class UsbEndpointManager(
 
     private var requestingPermission: Boolean = false
 
-    // Cancels pending open retries: bumped when a detach invalidates the chain.
-    // Retry closures capture the generation at schedule time and bail when it
-    // moved on.
+    // Cancels pending open retries: bumped when a detach invalidates the chain
+    // and when a new chain starts. Retry closures capture the generation at
+    // schedule time and bail when it moved on.
     private var openRetryGeneration = 0
+
+    // The permission watch (watchPermissionAndOpen): one chain at a time, a new
+    // chain cancels the running one. Main looper only.
+    private var permissionWatchGeneration = 0
+    private var permissionWatchActive = false
 
     // Skyle Link supervisor USB ownership gate: the device is opened/claimed
     // ONLY while the C supervisor has granted ownership. The permission flows
@@ -116,8 +126,8 @@ class UsbEndpointManager(
                 }
                 if (usbManager.hasPermission(device)) {
                     if (!openDevice(device)) scheduleOpenRetry(attempt = 0)
-                } else {
-                    pollForManifestGrantAndOpen(device)
+                } else if (!permissionWatchActive) {
+                    watchPermissionAndOpen(device)
                 }
             } else {
                 openRetryGeneration++
@@ -164,39 +174,74 @@ class UsbEndpointManager(
         isConnected && connectedDevice?.deviceName == device.deviceName
     }
 
-    // Poll hasPermission() while the manifest-routed UsbAttachActivity grant is
-    // propagating. When USB_DEVICE_ATTACHED fires, Android routes the intent to
-    // UsbAttachActivity and grants our package USB permission - but that grant
-    // lands a few hundred ms after the runtime broadcast does. Calling
-    // requestPermission() in that window races the manifest path, pops a second
-    // (non-persistent) dialog on top of the system one, and corrupts the
-    // requestingPermission flag. Polling lets the manifest grant arrive first.
-    private fun pollForManifestGrantAndOpen(device: UsbDevice, attempt: Int = 0) {
+    /**
+     * Re-enter the permission/open path for a tracker that is attached but not
+     * open - the scan registerReceiver runs at startup, which is what an app
+     * restart used to be needed for. Called on every engine attach (opening the
+     * app). No-op while the device is open or a permission watch is running.
+     */
+    fun recheckAttachedDevice() {
+        mainHandler.post {
+            val device = findTargetDevice() ?: return@post
+            if (isConnectedTo(device) || permissionWatchActive) return@post
+            Log.d("UsbEndpointManager", "Recheck: ${device.deviceName} attached but not open - re-entering the open path")
+            watchPermissionAndOpen(device)
+        }
+    }
+
+    // Watch hasPermission() until the grant lands, then open. First the
+    // manifest-routed UsbAttachActivity grant: when USB_DEVICE_ATTACHED fires,
+    // Android routes the intent to UsbAttachActivity and grants our package USB
+    // permission - but that grant lands a few hundred ms after the runtime
+    // broadcast does (and only after the user confirmed the system's attach
+    // dialog, unless "Use by default" is set). Calling requestPermission() in
+    // that window races the manifest path, pops a second (non-persistent) dialog
+    // on top of the system one, and corrupts the requestingPermission flag.
+    // Polling lets the manifest grant arrive first.
+    //
+    // After the explicit request the watch goes on at a slow rate while the
+    // device stays attached: the system's attach dialog still grants when it is
+    // confirmed after our window closed, and nothing broadcasts that grant to
+    // us - the response to our own request can be lost with its dialog, or be a
+    // "denied" from dismissing the duplicate. Stopping at the request left a
+    // permitted tracker closed until the app was restarted.
+    private fun watchPermissionAndOpen(device: UsbDevice) {
+        permissionWatchActive = true
+        pollPermission(device, ++permissionWatchGeneration, attempt = 0)
+    }
+
+    private fun pollPermission(device: UsbDevice, generation: Int, attempt: Int) {
+        if (generation != permissionWatchGeneration) return
         // Compare against THIS device instance: a lingering connection to a
         // previous enumeration of the tracker (device re-enumerated after a
         // firmware reset, DETACHED not processed yet) must not abort the chain
         // for the new instance - openDevice tears the stale one down.
-        if (isConnectedTo(device)) return
+        if (isConnectedTo(device)) {
+            permissionWatchActive = false
+            return
+        }
         if (usbManager.deviceList.values.none { it.deviceName == device.deviceName }) {
-            Log.d("UsbEndpointManager", "Device ${device.deviceName} gone - stopping grant poll (attach broadcast restarts it)")
+            Log.d("UsbEndpointManager", "Device ${device.deviceName} gone - stopping permission watch (attach broadcast restarts it)")
+            permissionWatchActive = false
             return
         }
         if (usbManager.hasPermission(device)) {
-            Log.d("UsbEndpointManager", "Manifest grant landed after $attempt attempt(s)")
+            Log.d("UsbEndpointManager", "USB permission present after $attempt poll(s)")
+            permissionWatchActive = false
             onUsbCapableChanged(true)
             openIfOwnershipWanted(device)
             return
         }
-        if (attempt >= GRANT_POLL_MAX_ATTEMPTS) {
-            // Manifest route clearly did not happen (e.g. device was already
-            // plugged in at app startup on a fresh install, before any user
-            // has checked "Use by default"). Fall back to an explicit
-            // permission request so the user is at least prompted.
-            Log.d("UsbEndpointManager", "Manifest grant never arrived, falling back to requestPermission()")
+        if (attempt == GRANT_POLL_MAX_ATTEMPTS) {
+            // Manifest route did not happen (nobody confirmed the system dialog
+            // yet, or the device was already plugged in at app startup on a
+            // fresh install). Fall back to an explicit permission request so the
+            // user is at least prompted.
+            Log.d("UsbEndpointManager", "Manifest grant not there after ${GRANT_POLL_MAX_ATTEMPTS * GRANT_POLL_INTERVAL_MS}ms, falling back to requestPermission() - watching for the grant from here on")
             requestPermissionAndOpen(device)
-            return
         }
-        mainHandler.postDelayed({ pollForManifestGrantAndOpen(device, attempt + 1) }, GRANT_POLL_INTERVAL_MS)
+        val delay = if (attempt < GRANT_POLL_MAX_ATTEMPTS) GRANT_POLL_INTERVAL_MS else PERMISSION_WATCH_INTERVAL_MS
+        mainHandler.postDelayed({ pollPermission(device, generation, attempt + 1) }, delay)
     }
 
     private fun requestPermissionAndOpen(device: UsbDevice) {
@@ -250,13 +295,9 @@ class UsbEndpointManager(
      * re-enumeration) and re-enters the grant flow when permission is missing.
      */
     private fun scheduleOpenRetry(attempt: Int) {
-        if (attempt >= OPEN_RETRY_MAX_ATTEMPTS) {
-            Log.e("UsbEndpointManager", "Giving up opening device after $attempt retries - replug required")
-            return
-        }
-        val generation = openRetryGeneration
+        val generation = if (attempt == 0) ++openRetryGeneration else openRetryGeneration
         val delay = minOf(OPEN_RETRY_BASE_DELAY_MS * (attempt + 1), OPEN_RETRY_MAX_DELAY_MS)
-        Log.d("UsbEndpointManager", "Retrying open in ${delay}ms (attempt ${attempt + 1}/$OPEN_RETRY_MAX_ATTEMPTS)")
+        Log.d("UsbEndpointManager", "Retrying open in ${delay}ms (attempt ${attempt + 1})")
         mainHandler.postDelayed({
             if (generation != openRetryGeneration) return@postDelayed
             if (!ownershipWanted) {
@@ -271,8 +312,8 @@ class UsbEndpointManager(
             if (isConnectedTo(current)) return@postDelayed
             if (usbManager.hasPermission(current)) {
                 if (!openDevice(current)) scheduleOpenRetry(attempt + 1)
-            } else {
-                pollForManifestGrantAndOpen(current)
+            } else if (!permissionWatchActive) {
+                watchPermissionAndOpen(current)
             }
         }, delay)
     }
@@ -297,7 +338,7 @@ class UsbEndpointManager(
                         Log.d("UsbEndpointManager", "Attached: ${it.deviceName}, vendorId=${it.vendorId}, productId=${it.productId}")
                         // logUsbDevice(it)
                         if (it.vendorId == targetVendorId && it.productId == targetProductId) {
-                            pollForManifestGrantAndOpen(device)
+                            watchPermissionAndOpen(device)
                         }
                     }
                 }
@@ -324,7 +365,11 @@ class UsbEndpointManager(
                     synchronized(this) {
                         Log.d("UsbEndpointManager", "=== PERMISSION RESPONSE RECEIVED ===")
                         var device = usbDeviceExtra(intent)
-                        val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                        // Our request's dialog answers "denied" when it is dismissed
+                        // even though the system's attach dialog granted the
+                        // permission meanwhile - the actual permission decides.
+                        val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) ||
+                            (device != null && usbManager.hasPermission(device))
 
                         Log.d("UsbEndpointManager", "Permission response - device: ${device?.deviceName}, granted: $granted")
 
@@ -371,8 +416,8 @@ class UsbEndpointManager(
             if (it.vendorId == targetVendorId && it.productId == targetProductId) {
                 // Device already plugged in at startup. If the user previously checked
                 // "Use by default", hasPermission() is already true and openDevice runs
-                // immediately. Otherwise the poller falls back to requestPermission().
-                pollForManifestGrantAndOpen(it)
+                // immediately. Otherwise the watch falls back to requestPermission().
+                watchPermissionAndOpen(it)
             }
         }
     }

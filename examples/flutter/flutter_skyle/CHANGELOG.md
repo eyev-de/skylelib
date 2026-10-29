@@ -177,6 +177,32 @@
 
 ### Fixed
 
+- Skyle Link hub: file transfers from hub clients lost chunks. Forwarded
+  StartFile/FileData/EndFile frames went through the 32-slot priority send
+  ring, which dropped 4 KB chunks whenever the USB writer stalled for a few
+  hundred ms, and the device then failed the upload at its chunk-count check
+  ("received 1591 of 2754 chunks"). They now use the bulk FIFO with
+  backpressure, like an own `uploadFile`.
+- Skyle Link hub: the final StatusFile (SUCCESS / FAILED) never reached the
+  uploading hub client - the hub released the transfer on the client's EndFile,
+  but the device only answers after it. The transfer is now released by the
+  final status.
+- Android: the USB layer (`UsbEndpointManager`, `SkyleUsbHost`,
+  `FlutterSkylePlugin`) logs through `android.util.Log`. `io.flutter.Log.d` is
+  compiled out of release builds, so field logs showed no attach, permission,
+  open or ownership events at all.
+
+- Android: a tracker plugged in while the app was running could stay
+  unconnected until the app was restarted. When the system's "Allow access"
+  dialog was not confirmed within 5 s, the plugin fell back to its own
+  permission request and stopped watching; a grant from the system dialog after
+  that, or a dismissed duplicate dialog (reported as denied), left the permitted
+  device closed. The permission is now watched for as long as the device stays
+  attached, a "denied" response is checked against `hasPermission()`, failed
+  opens are retried without a limit while the device is attached, and every
+  engine attach (`SkyleUsbHost.start` when already running) re-enters the open
+  path for an attached tracker that is not open.
+
 - skylelib: a FinishedCalibration (0x00C6) that the message buffer dropped
   (buffer full), cleared or still held at destroy leaked its quality point
   arrays; the buffer now frees them, while a dequeued message stays owned by

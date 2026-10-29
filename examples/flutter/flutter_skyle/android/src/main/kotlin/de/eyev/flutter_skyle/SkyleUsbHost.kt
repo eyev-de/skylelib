@@ -1,7 +1,7 @@
 package de.eyev.flutter_skyle
 
 import android.content.Context
-import io.flutter.Log
+import android.util.Log
 
 /**
  * Process-wide owner of the Skyle USB transport, independent of any Flutter
@@ -91,6 +91,9 @@ object SkyleUsbHost {
     fun start(context: Context): Boolean {
         synchronized(lock) {
             if (isStarted) {
+                // Engine attach (app opened) / service rebind: pick up a tracker
+                // that is attached but was never opened.
+                usbManager?.recheckAttachedDevice()
                 return true
             }
 
