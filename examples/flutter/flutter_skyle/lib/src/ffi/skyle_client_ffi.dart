@@ -620,6 +620,22 @@ class SkyleClientFfi {
     _emitLog(LogLevel.information, 'SkyleClientFfi', 'stopUsbHost: supervisor disabled, tracker released');
   }
 
+  /// Testing only (iOS): makes the plugin treat its open EASession as dead,
+  /// exactly like a stream error or end - it closes the session (the client
+  /// goes DISCONNECTED) and reopens a fresh one after a short backoff.
+  /// Returns false on other platforms, when no session is open, or on error.
+  static Future<bool> debugSimulateTransportFailure() async {
+    if (!Platform.isIOS) return false;
+    try {
+      final result = await _methodChannel.invokeMethod<bool>('debugSimulateTransportFailure');
+      _emitLog(LogLevel.warning, 'SkyleClientFfi', 'debugSimulateTransportFailure: ${result == true ? 'session closed, reopen scheduled' : 'no session open'}');
+      return result == true;
+    } catch (e) {
+      _emitLog(LogLevel.error, 'SkyleClientFfi', 'debugSimulateTransportFailure failed: $e');
+      return false;
+    }
+  }
+
   /// Signal Kotlin to configure native transport
   /// This must be called AFTER callbacks are set to prevent race condition
   Future<void> _configureTransport() async {

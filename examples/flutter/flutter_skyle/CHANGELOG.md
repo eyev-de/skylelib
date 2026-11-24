@@ -2,6 +2,12 @@
 
 ### Added
 
+- `SkyleClient.debugSimulateTransportFailure()` (static, iOS only, testing
+  only): injects the same failure as a real stream error on the open EASession
+  so the close + reopen recovery can be verified on a device without
+  unplugging the tracker. Returns false on other platforms or without a
+  session. Method channel call `debugSimulateTransportFailure`.
+
 - Device-initiated calibration aborts reach Dart: the callback struct gains
   `on_calibration_aborted` (appended after `on_host_state`, ABI order shared by
   `native/fanout/flutter_skyle_fanout.h`, the darwin iOS copy and
@@ -177,6 +183,18 @@
 
 ### Fixed
 
+- iOS: a dead EASession no longer leaves the link stuck in `linkSynced`. Push
+  mode has no heartbeat, so an `errorOccurred` / `endEncountered` event on the
+  session's input or output stream (accessory still attached) used to be only
+  printed: the writer kept accepting data into a dead stream and the firmware
+  never answered, until the app was restarted. The plugin now closes the
+  session (the client goes DISCONNECTED, `stateStream` reports it) and reopens
+  a fresh EASession after 0.5s, retrying with a backoff of 1s, 2s, 4s, then
+  every 5s while the accessory stays attached. The reopen is cancelled by a real
+  accessory disconnect (the accessory notifications own reconnecting then),
+  engine detach and app termination. `OutputStreamManager` reports its failure
+  to the plugin and exposes `hasFailed` / `isWritable`; `transportWrite`
+  returns -1 for a failed or closed writer instead of reporting success.
 - Skyle Link hub: file transfers from hub clients lost chunks. Forwarded
   StartFile/FileData/EndFile frames went through the 32-slot priority send
   ring, which dropped 4 KB chunks whenever the USB writer stalled for a few

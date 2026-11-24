@@ -4,11 +4,40 @@ class OutputStreamManager: NSObject, StreamDelegate {
   private let writeQueue = DispatchQueue(label: "de.eyev.writequeue")
   private var writeBuffer: [Data] = []
   private var canWrite = false
-  private var isClosed = false
+  // `closedFlag` and `failedFlag` are read from arbitrary threads (the C send
+  // thread asks isWritable in transportWrite), so they sit behind a lock.
+  private let stateLock = NSLock()
+  private var closedFlag = false
+  private var failedFlag = false
+  private var isClosed: Bool {
+    get { stateLock.lock(); defer { stateLock.unlock() }; return closedFlag }
+    set { stateLock.lock(); closedFlag = newValue; stateLock.unlock() }
+  }
   private weak var outputStream: OutputStream?
   // Capture the runloop where streams are scheduled at init so deinit can
   // unschedule from the correct runloop regardless of which thread releases us.
   private let scheduledRunLoop: RunLoop
+
+  /// Called once, on the thread that owns the stream's run loop (never on the
+  /// write queue), when the output stream reports an error or its end. The
+  /// plugin uses it to reopen the dead EASession and hops to the main queue
+  /// before it calls close(), which blocks on the write queue.
+  var onFailure: ((OutputStreamManager) -> Void)?
+
+  /// True once the stream reported an error or end (the EASession behind it
+  /// is dead; writes can no longer succeed).
+  var hasFailed: Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return failedFlag
+  }
+
+  /// True while a write handed to enqueueData can still reach the stream.
+  var isWritable: Bool {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return !closedFlag && !failedFlag
+  }
 
   init(outputStream: OutputStream) {
     self.outputStream = outputStream
@@ -43,6 +72,21 @@ class OutputStreamManager: NSObject, StreamDelegate {
         stream.remove(from: scheduledRunLoop, forMode: .default)
         stream.delegate = nil
       }
+    }
+  }
+
+  /// Marks the stream dead and notifies onFailure exactly once.
+  /// Called from the stream delegate callback (run-loop thread).
+  private func markFailed() {
+    stateLock.lock()
+    let first = !failedFlag && !closedFlag
+    failedFlag = true
+    stateLock.unlock()
+    writeQueue.async { [weak self] in
+      self?.canWrite = false
+    }
+    if first {
+      onFailure?(self)
     }
   }
 
@@ -114,16 +158,10 @@ class OutputStreamManager: NSObject, StreamDelegate {
       }
     case .errorOccurred:
       print("[OutputStreamManager] error: \(aStream.streamError?.localizedDescription ?? "unknown")")
-      writeQueue.async { [weak self] in
-        guard let self = self else { return }
-        self.canWrite = false
-      }
+      markFailed()
     case .endEncountered:
       print("[OutputStreamManager] stream ended")
-      writeQueue.async { [weak self] in
-        guard let self = self else { return }
-        self.canWrite = false
-      }
+      markFailed()
     default:
       break
     }

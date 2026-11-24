@@ -598,6 +598,20 @@ class SkyleClient implements SkyleControl, SkyleGaze, SkylePositioning, SkyleVid
   /// No-op on iOS (no supervisor). Eye tracking is off afterwards.
   static Future<void> stopUsbHost({Duration timeout = const Duration(milliseconds: 2500)}) => SkyleClientFfi.stopUsbHost(timeout: timeout);
 
+  /// FOR TESTING ONLY - never call this from production code paths.
+  ///
+  /// iOS: makes the plugin treat its open EASession as dead, the same way a
+  /// real stream error / end does: the session is closed (the connection state
+  /// goes down to [ConnectionState.disconnected]) and the plugin reopens a
+  /// fresh session after a short backoff (0.5s, 1s, 2s, 4s, then every 5s while
+  /// the accessory stays attached), which brings the state back to
+  /// [ConnectionState.linkSynced]. Lets you verify the recovery on a real
+  /// device without unplugging the tracker.
+  ///
+  /// Returns true when a session was open and the failure was injected; false
+  /// on every other platform (no-op), when no session is open, or on error.
+  static Future<bool> debugSimulateTransportFailure() => SkyleClientFfi.debugSimulateTransportFailure();
+
   // ==========================================================================
   // Feature Control
   // ==========================================================================

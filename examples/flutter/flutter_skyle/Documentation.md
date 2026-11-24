@@ -125,6 +125,13 @@ Stream<ConnectionState> get stateStream;
 Stream<String> get errorStream;
 ```
 
+On iOS the link recovers by itself when the EASession dies while the tracker is
+still attached (stream error / end): the state goes to `disconnected`, and the
+plugin reopens a session with a backoff (0.5s, 1s, 2s, 4s, then every 5s) until
+`linkSynced` is back. `SkyleClient.debugSimulateTransportFailure()` (static,
+iOS only, **testing only**, returns `false` elsewhere) triggers exactly that
+failure path so you can verify it on a device.
+
 ### Data streams
 
 All streams are broadcast and emit on the platform/UI isolate (data is marshalled

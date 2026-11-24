@@ -18,6 +18,21 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
 
     private var writer: OutputStreamManager?
 
+    // Dead-session recovery (see handleTransportFailure). The iOS transport is
+    // push mode without a heartbeat, so the stream error / end events are the
+    // only way to learn that the EASession died while the accessory is still
+    // attached. All of this state is main-thread only.
+    private var reconnectWorkItem: DispatchWorkItem?
+    private var reconnectAttempt = 0
+    private var sessionOpenedAt: Date?
+    /// Delays before reopen attempt 1..n; later attempts use reconnectMaxDelay.
+    private static let reconnectDelays: [TimeInterval] = [0.5, 1, 2, 4]
+    private static let reconnectMaxDelay: TimeInterval = 5
+    /// A session that lived at least this long counts as healthy: the next
+    /// failure restarts the backoff at the first delay instead of continuing it
+    /// (so a session that dies right after opening cannot reopen in a tight loop).
+    private static let stableSessionSeconds: TimeInterval = 10
+
     // C client pointer (singleton, created by Dart FFI layer)
     private var clientPtr: OpaquePointer?
 
@@ -68,6 +83,9 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
         case "configureTransport":
             let success = configureTransport()
             result(success)
+        case "debugSimulateTransportFailure":
+            // Testing only: runs the same handler as a real stream error.
+            result(simulateTransportFailure())
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -120,7 +138,9 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
 
         let plugin = Unmanaged<FlutterSkylePlugin>.fromOpaque(userData).takeUnretainedValue()
 
-        guard let writer = plugin.writer else {
+        // A failed or closed writer (the EASession died) can never deliver the
+        // bytes - report the failure instead of pretending success.
+        guard let writer = plugin.writer, writer.isWritable else {
             return -1
         }
 
@@ -177,6 +197,11 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
         }
 
         self.session = newSession
+        sessionOpenedAt = Date()
+        // A session is up (normal connect notification or our own reopen): a
+        // pending scheduled reopen is obsolete. The backoff counter is kept
+        // until the session proves stable (see handleTransportFailure).
+        cancelReconnect(resetBackoff: false)
 
         if let inputStream = newSession.inputStream {
             inputStream.delegate = self
@@ -185,7 +210,11 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
         }
 
         if let outputStream = newSession.outputStream {
-            writer = OutputStreamManager(outputStream: outputStream)
+            let manager = OutputStreamManager(outputStream: outputStream)
+            manager.onFailure = { [weak self] failed in
+                self?.handleTransportFailure(source: failed, reason: "output stream failed")
+            }
+            writer = manager
         }
 
         print("[FlutterSkylePlugin] Session opened for \(accessory.name)")
@@ -215,6 +244,7 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
         // EASession is still alive - guarantees no in-flight stream.write()
         // can run after the EASession is released and the iAP2/USB endpoint
         // is gone (which is what crashes iOS on physical unplug).
+        writer?.onFailure = nil
         writer?.close()
         writer = nil
 
@@ -228,6 +258,105 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
         accessory = nil
 
         print("[FlutterSkylePlugin] Session closed")
+    }
+
+    // MARK: - Dead session recovery
+
+    /// Debug entry point (method channel `debugSimulateTransportFailure`):
+    /// behaves like a stream error on the open session. Returns false when no
+    /// session is open (nothing to fail).
+    private func simulateTransportFailure() -> Bool {
+        guard session != nil || writer != nil else {
+            print("[FlutterSkylePlugin] debugSimulateTransportFailure: no session open")
+            return false
+        }
+        handleTransportFailure(source: nil, reason: "debug simulation")
+        return true
+    }
+
+    /// The EASession is dead while the accessory may still be attached (stream
+    /// error / end on the input or output stream). Without this the C client
+    /// stays LINK_SYNCED over dead streams forever, because push mode has no
+    /// heartbeat: close the session (drives the client to DISCONNECTED so Dart
+    /// sees the link go down) and reopen a fresh EASession after a short delay.
+    ///
+    /// Callable from any thread. The work is always deferred to the main queue,
+    /// so a StreamDelegate callback has returned before its stream gets closed
+    /// and OutputStreamManager's callback is off its own write queue (close()
+    /// blocks on it). `source` is the stream / writer that reported the failure
+    /// (nil = unconditional); a report from a session that was already replaced
+    /// is dropped, which also makes the handler idempotent when both streams
+    /// report the same failure.
+    private func handleTransportFailure(source: AnyObject?, reason: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.clientPtr != nil else { return }
+            guard self.session != nil || self.writer != nil else { return }
+            if let source = source, source !== self.session?.inputStream, source !== self.writer {
+                return
+            }
+
+            print("[FlutterSkylePlugin] Transport failure (\(reason)) - closing session")
+
+            let accessoryGone = !(self.accessory?.isConnected ?? true)
+            if let opened = self.sessionOpenedAt, Date().timeIntervalSince(opened) >= FlutterSkylePlugin.stableSessionSeconds {
+                self.reconnectAttempt = 0
+            }
+            self.closeSession()
+
+            if accessoryGone {
+                // A real unplug: the accessory notifications own the reconnect.
+                print("[FlutterSkylePlugin] Accessory is gone - waiting for it to reconnect")
+                return
+            }
+            self.scheduleReconnect()
+        }
+    }
+
+    /// Schedules the next reopen attempt: 0.5s, 1s, 2s, 4s, then every 5s.
+    private func scheduleReconnect() {
+        reconnectWorkItem?.cancel()
+        let delays = FlutterSkylePlugin.reconnectDelays
+        let delay = reconnectAttempt < delays.count ? delays[reconnectAttempt] : FlutterSkylePlugin.reconnectMaxDelay
+        reconnectAttempt += 1
+        let item = DispatchWorkItem { [weak self] in
+            self?.performReconnect()
+        }
+        reconnectWorkItem = item
+        print("[FlutterSkylePlugin] Reopening session in \(delay)s (attempt \(reconnectAttempt))")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func performReconnect() {
+        reconnectWorkItem = nil
+        // Plugin detached, or a session already came up through the normal
+        // connect notification: nothing to do.
+        guard clientPtr != nil, session == nil else { return }
+
+        let present = EAAccessoryManager.shared().connectedAccessories.contains {
+            $0.isConnected && $0.protocolStrings.contains(communicationProtocol)
+        }
+        guard present else {
+            // Accessory unplugged meanwhile: didConnectAccessory reopens on replug.
+            print("[FlutterSkylePlugin] Reopen: accessory gone, waiting for it to reconnect")
+            reconnectAttempt = 0
+            return
+        }
+
+        connect()
+        if session == nil {
+            print("[FlutterSkylePlugin] Reopen failed (no EASession), retrying")
+            scheduleReconnect()
+        } else {
+            print("[FlutterSkylePlugin] Reopen succeeded")
+        }
+    }
+
+    private func cancelReconnect(resetBackoff: Bool) {
+        reconnectWorkItem?.cancel()
+        reconnectWorkItem = nil
+        if resetBackoff {
+            reconnectAttempt = 0
+        }
     }
 
     // MARK: - StreamDelegate
@@ -248,9 +377,13 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
             break
         case Stream.Event.errorOccurred:
             print("[FlutterSkylePlugin] Stream error: \(aStream.streamError?.localizedDescription ?? "unknown")")
+            if aStream === session?.inputStream {
+                handleTransportFailure(source: aStream, reason: "input stream error")
+            }
         case Stream.Event.endEncountered:
-            if aStream == session?.inputStream {
+            if aStream === session?.inputStream {
                 print("[FlutterSkylePlugin] Input stream ended")
+                handleTransportFailure(source: aStream, reason: "input stream ended")
             }
         default:
             break
@@ -281,6 +414,8 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
 
     @objc
     private func didConnectAccessory(_ notification: NSNotification) {
+        // A real (re)connect takes over from any scheduled reopen.
+        cancelReconnect(resetBackoff: true)
         if let acc = notification.userInfo?[EAAccessoryKey] as? EAAccessory,
            acc.protocolStrings.contains(communicationProtocol) {
             printAccessoryDetails(accessory: acc)
@@ -294,6 +429,13 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
 
     @objc
     private func didDisconnectAccessory(_ notification: NSNotification) {
+        // A real accessory disconnect: the notifications own reconnecting now.
+        // Our failure handler may already have cleared self.accessory, so match
+        // on the notification's accessory too.
+        let gone = notification.userInfo?[EAAccessoryKey] as? EAAccessory
+        if gone == nil || gone?.protocolStrings.contains(communicationProtocol) == true || self.accessory != nil {
+            cancelReconnect(resetBackoff: true)
+        }
         if let acc = self.accessory, !acc.isConnected {
             print("[FlutterSkylePlugin] Accessory disconnected: \(acc.name)")
             closeSession()
@@ -302,6 +444,7 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
 
     public func accessoryDidDisconnect(_ accessory: EAAccessory) {
         print("[FlutterSkylePlugin] accessoryDidDisconnect: \(accessory.name)")
+        cancelReconnect(resetBackoff: true)
         closeSession()
     }
 
@@ -312,6 +455,7 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
     /// arriving on the next RunLoop turn cannot call a closed NativeCallable
     /// and trigger DLRT_GetFfiCallbackMetadata -> abort().
     public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
+        cancelReconnect(resetBackoff: true)
         if let ptr = clientPtr {
             flutter_skyle_clear_callbacks(ptr)
             clientPtr = nil
@@ -325,6 +469,7 @@ public class FlutterSkylePlugin: NSObject, FlutterPlugin, StreamDelegate, EAAcce
     }
 
     @objc private func handleWillTerminate(_ notification: NSNotification) {
+        cancelReconnect(resetBackoff: true)
         if let ptr = clientPtr {
             flutter_skyle_clear_callbacks(ptr)
             print("[FlutterSkylePlugin] handleWillTerminate: callbacks cleared")
